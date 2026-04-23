@@ -126,26 +126,58 @@ class AbonelikIslemleri(VeritabaniTabani):
         super().__init__(db_adi)
     
     def ekle(self, servis_adi: str, tutar: float, tarih: str, 
-             kategori: str, kullanici_id: int) -> int:
-        """Yeni bir abonelik ekler ve eklenen kaydın ID'sini döner."""
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
+             kategori: str, kullanici_id: int):
+        """
+        Yeni bir abonelik ekler ve eklenen kaydın ID'sini döner.
+        Hata durumunda False döner.
+        """
+        conn = None
+        try:
+            # Tutar değerinin sayı olup olmadığını kontrol et
+            if not isinstance(tutar, (int, float)):
+                raise ValueError(f"Tutar sayı olmalıdır, '{tutar}' tipi alındı.")
+            
+            # Tutar negatif olamaz
+            if tutar < 0:
+                raise ValueError("Tutar negatif olamaz.")
+            
+            # Parametreleri bir demet (tuple) olarak net bir şekilde veriyoruz
+            veriler = (servis_adi, tutar, tarih, kategori, kullanici_id)
+            
+            # Veritabanına bağlan
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            # Veriyi ekle
+            cursor.execute('''
+                INSERT INTO abonelikler (servis_adi, tutar, odeme_tarihi, kategori, kullanici_id)
+                VALUES (?, ?, ?, ?, ?)
+            ''', veriler)
+            
+            conn.commit()
+            yeni_id = cursor.lastrowid
+            
+            return yeni_id
         
-        # Parametreleri bir demet (tuple) olarak net bir şekilde veriyoruz
-        veriler = (servis_adi, tutar, tarih, kategori, kullanici_id)
+        except ValueError as e:
+            # Veri tipi hatası
+            print(f"❌ VERİ HATASI: {e}")
+            return False
         
-        cursor.execute('''
-            INSERT INTO abonelikler (servis_adi, tutar, odeme_tarihi, kategori, kullanici_id)
-            VALUES (?, ?, ?, ?, ?)
-        ''', veriler)
+        except sqlite3.DatabaseError as e:
+            # Veritabanı hatası
+            print(f"❌ VERİTABANI HATASI: {e}")
+            return False
         
-        conn.commit()
-        yeni_id = cursor.lastrowid
-        conn.close()
+        except Exception as e:
+            # Diğer beklenmeyen hatalar
+            print(f"❌ BEKLENMEYEN HATA: {e}")
+            return False
         
-        return yeni_id
-        
-        return yeni_id
+        finally:
+            # Bağlantı her durumda kapatılır
+            if conn is not None:
+                conn.close()
     
     def sil(self, abone_id: int) -> bool:
         """Verilen ID'ye sahip aboneliği siler."""
@@ -185,6 +217,7 @@ class AbonelikIslemleri(VeritabaniTabani):
             })
         
         return abonelikler
+
 
 
 class AnalizMerkezi(VeritabaniTabani):
@@ -283,3 +316,19 @@ class AnalizMerkezi(VeritabaniTabani):
             })
         
         return yaklasan_odemeler
+    
+if __name__ == "__main__":
+    # Test için nesneleri oluşturuyoruz
+    islem = AbonelikIslemleri()
+    analiz = AnalizMerkezi()
+    
+    # MANUEL VERİ GİRİŞİ (Deneme yapıyoruz)
+    print("Veri ekleniyor...")
+    islem.ekle("Netflix", 189.90, "2026-05-15", "Eglence", 1)
+    
+    # VERİLERİ ÇEKİP TERMİNALDE GÖRME
+    liste = islem.listele_hepsi(1)
+    print("Veritabanındaki Abonelikler:", liste)
+    
+    # Hatalı veri denemesi (Tutar yerine yazı yazıyoruz)
+islem.ekle("Netflix", "Çok Pahalı", "2026-05-15", "Eglence", 1)

@@ -51,39 +51,61 @@ class KullaniciIslemleri(VeritabaniTabani):
     def __init__(self, db_adi: str = 'subtrack.db'):
         super().__init__(db_adi)
     
-    def kayit_ol(self, kullanici_adi: str, sifre: str) -> bool:
+    def kayit_ol(self, kullanici_adi: str, sifre: str) -> tuple:
         """
-        Yeni bir kullanıcı kaydeder.
+        Yeni bir kullanıcı kaydeder. Mükerrer kayıt ve güvenlik kontrolü yapar.
         
         Parametreler:
             kullanici_adi (str): Kayıt olacak kullanıcının adı
             sifre (str): Kullanıcının şifresi (hashlenecek)
         
         Dönüş:
-            bool: Kayıt başarılıysa True, başarısızsa False
+            tuple: (başarı: bool, mesaj: str) 
+                   Başarılı: (True, "Başarıyla kayıt olundu")
+                   Mükerrer: (False, "Bu kullanıcı adı zaten mevcut")
+                   Hata: (False, "hata mesajı")
         """
+        # Giriş doğrulaması
+        if not kullanici_adi or not sifre:
+            return (False, "Kullanıcı adı ve şifre boş olamaz")
+        
+        if len(kullanici_adi) < 3:
+            return (False, "Kullanıcı adı en az 3 karakter olmalıdır")
+        
+        if len(sifre) < 4:
+            return (False, "Şifre en az 4 karakter olmalıdır")
+        
+        # Veritabanına bağlan
+        conn = self.baglanti_ac()
+        cursor = conn.cursor()
+        
         try:
-            # Şifreyi hashle
+            # Kullanıcı adının zaten veritabanında olup olmadığını kontrol et
+            cursor.execute('''
+                SELECT id FROM kullanicilar WHERE kullanici_adi = ?
+            ''', (kullanici_adi,))
+            
+            if cursor.fetchone() is not None:
+                conn.close()
+                return (False, "Bu kullanıcı adı zaten mevcut")
+            
+            # Şifreyi guvenlik.py ile hashle
             sifre_ozeti = sifreyi_ozetle(sifre)
             
-            # Veritabanına bağlan
-            conn = self.baglanti_ac()
-            cursor = conn.cursor()
-            
-            # Kullanıcıyı ekle
+            # Kullanıcıyı veritabanına ekle
             cursor.execute('''
                 INSERT INTO kullanicilar (kullanici_adi, sifre_ozeti)
                 VALUES (?, ?)
             ''', (kullanici_adi, sifre_ozeti))
             
             conn.commit()
-            conn.close()
-            
-            return True
+            return (True, "Başarıyla kayıt olundu")
         
-        except sqlite3.IntegrityError:
-            # Kullanıcı adı zaten varsa
-            return False
+        except Exception as e:
+            return (False, f"Kayıt sırasında hata oluştu: {str(e)}")
+        
+        finally:
+            conn.close()
     
     def giris_yap(self, kullanici_adi: str, sifre: str) -> bool:
         """
@@ -331,4 +353,11 @@ if __name__ == "__main__":
     print("Veritabanındaki Abonelikler:", liste)
     
     # Hatalı veri denemesi (Tutar yerine yazı yazıyoruz)
-islem.ekle("Netflix", "Çok Pahalı", "2026-05-15", "Eglence", 1)
+    islem.ekle("Netflix", "Çok Pahalı", "2026-05-15", "Eglence", 1)
+    # Önce sınıftan bir nesne oluşturuyoruz
+    kullanici_servisi = KullaniciIslemleri() 
+
+    # Şimdi o nesne üzerinden fonksiyonu çağırıyoruz
+    kullanici_servisi.kayit_ol("demet", "1234") 
+    print("Kullanıcı başarıyla kaydedildi!")
+

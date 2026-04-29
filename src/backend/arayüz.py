@@ -1,25 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import hashlib
-import json
-import os
 import re
-
-# ── Veri dosyası ──────────────────────────────────────────────
-DATA_FILE = "users.json"
-
-def load_users():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_users(users):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-
-def hash_password(pw: str) -> str:
-    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
+from vt_islemleri import KullaniciIslemleri, AbonelikIslemleri
 
 # ── Renkler & Fontlar ─────────────────────────────────────────
 BG        = "#0D0F1A"   # koyu lacivert arka plan
@@ -130,7 +112,8 @@ class App(tk.Tk):
         self.configure(bg=BG)
         self.resizable(False, False)
         self._center(500, 620)
-        self.users = load_users()
+        self.kullanici_motoru = KullaniciIslemleri()
+        self.abonelik_motoru = AbonelikIslemleri()
         self._show_login()
 
     def _center(self, w, h):
@@ -170,10 +153,10 @@ class App(tk.Tk):
         tk.Label(card, text="Hesabına Giriş Yap", bg=CARD, fg=TEXT,
                  font=("Helvetica", 13, "bold")).pack(pady=(18, 12))
 
-        # E-posta
-        tk.Label(card, text="E-POSTA", bg=CARD, fg=MUTED,
+        # Kullanıcı Adı
+        tk.Label(card, text="KULLANICI ADI", bg=CARD, fg=MUTED,
                  font=FONT_LABEL, anchor="w").pack(fill="x", padx=30)
-        self.login_email = styled_entry(card, "ornek@mail.com")
+        self.login_email = styled_entry(card, "Kullanıcı adını gir")
         self.login_email.pack(padx=30, pady=(2, 10), ipady=6, fill="x")
 
         # Şifre
@@ -230,16 +213,16 @@ class App(tk.Tk):
         tk.Label(card, text="Üye Ol", bg=CARD, fg=TEXT,
                  font=("Helvetica", 13, "bold")).pack(pady=(18, 12))
 
+        # Kullanıcı Adı
+        tk.Label(card, text="KULLANICI ADI", bg=CARD, fg=MUTED,
+                 font=FONT_LABEL, anchor="w").pack(fill="x", padx=30)
+        self.reg_name = styled_entry(card, "Kullanıcı adı seç")
+        self.reg_name.pack(padx=30, pady=(2, 10), ipady=6, fill="x")
+
         # Ad Soyad
         tk.Label(card, text="AD SOYAD", bg=CARD, fg=MUTED,
                  font=FONT_LABEL, anchor="w").pack(fill="x", padx=30)
-        self.reg_name = styled_entry(card, "Adın Soyadın")
-        self.reg_name.pack(padx=30, pady=(2, 10), ipady=6, fill="x")
-
-        # E-posta
-        tk.Label(card, text="E-POSTA", bg=CARD, fg=MUTED,
-                 font=FONT_LABEL, anchor="w").pack(fill="x", padx=30)
-        self.reg_email = styled_entry(card, "ornek@mail.com")
+        self.reg_email = styled_entry(card, "Adın Soyadın")
         self.reg_email.pack(padx=30, pady=(2, 10), ipady=6, fill="x")
 
         # Şifre
@@ -298,40 +281,38 @@ class App(tk.Tk):
             self.login_msg.config(text="Lütfen tüm alanları doldurun.", fg=ERROR)
             return
 
-        hashed = hash_password(pw)
-        if email in self.users and self.users[email]["password"] == hashed:
-            name = self.users[email].get("name", "Kullanıcı")
-            self._show_dashboard(name)
+        if self.kullanici_motoru.giris_yap(email, pw):
+            self._show_dashboard(email)
         else:
-            self.login_msg.config(
-                text="E-posta veya şifre hatalı.", fg=ERROR)
+            self.login_msg.config(text="Kullanıcı adı veya şifre hatalı.", fg=ERROR)
 
     def _do_register(self):
-        name  = self.reg_name.get_value().strip()
-        email = self.reg_email.get_value().strip()
-        pw    = self.reg_pw.get_value()
-        pw2   = self.reg_pw2.get_value()
+        username = self.reg_name.get_value().strip()
+        ad_soyad = self.reg_email.get_value().strip()
+        pw       = self.reg_pw.get_value()
+        pw2      = self.reg_pw2.get_value()
 
-        if not all([name, email, pw, pw2]):
+        if not all([username, ad_soyad, pw, pw2]):
             self.reg_msg.config(text="Lütfen tüm alanları doldurun.", fg=ERROR)
             return
-        if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w{2,}$", email):
-            self.reg_msg.config(text="Geçerli bir e-posta adresi girin.", fg=ERROR)
+        if len(username) < 3:
+            self.reg_msg.config(text="Kullanıcı adı en az 3 karakter olmalı.", fg=ERROR)
             return
-        if len(pw) < 6:
-            self.reg_msg.config(text="Şifre en az 6 karakter olmalı.", fg=ERROR)
+        if len(pw) < 4:
+            self.reg_msg.config(text="Şifre en az 4 karakter olmalı.", fg=ERROR)
             return
         if pw != pw2:
             self.reg_msg.config(text="Şifreler eşleşmiyor.", fg=ERROR)
             return
-        if email in self.users:
-            self.reg_msg.config(text="Bu e-posta zaten kayıtlı.", fg=ERROR)
-            return
 
-        self.users[email] = {"name": name, "password": hash_password(pw)}
-        save_users(self.users)
-        messagebox.showinfo("Başarılı", f"Hoş geldin, {name}! 🎉\nŞimdi giriş yapabilirsin.")
-        self._show_login()
+        # Senin yazdığın akıllı fonksiyonu çağırıyoruz
+        basarili, mesaj = self.kullanici_motoru.kayit_ol(username, pw) # vt_islemleri'ne gider
+
+        if basarili:
+            messagebox.showinfo("Başarılı", f"Hoş geldin, {username}! 🎉\nKayıt tamamlandı.")
+            self._show_login()
+        else:
+            self.reg_msg.config(text=mesaj, fg=ERROR)
 
     # ── DASHBOARD (geçici hoşgeldin ekranı) ──────────────────
     def _show_dashboard(self, name):
@@ -350,6 +331,20 @@ class App(tk.Tk):
 
         btn = styled_button(f, "Çıkış Yap", self._show_login, color=MUTED, width=16)
         btn.pack(pady=24)
+        
+        # Senin yazdığın analiz motorlarını çağırıyoruz[cite: 5]
+        toplam = self.abonelik_motoru.toplam_maliyet_hesapla(1) # Örnek ID: 1
+        yaklasanlar = self.abonelik_motoru.yaklasan_odemeler(1)
+
+        # Ekrana yazdır
+        tk.Label(f, text=f"Toplam Harcama: {toplam} TL", bg=BG, fg=SUCCESS, 
+                font=FONT_BTN).pack(pady=10)
+
+        # Yaklaşan bir ödeme varsa göster
+        if yaklasanlar:
+            ilk_odeme = yaklasanlar[0]
+            tk.Label(f, text=f"Sıradaki: {ilk_odeme['servis_adi']} ({ilk_odeme['odeme_tarihi']})", 
+                    bg=BG, fg=ACCENT2, font=FONT_SMALL).pack()
 
 
 if __name__ == "__main__":

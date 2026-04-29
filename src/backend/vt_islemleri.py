@@ -87,7 +87,7 @@ class KullaniciIslemleri(VeritabaniTabani):
             
             if cursor.fetchone() is not None:
                 conn.close()
-                return (False, "Bu kullanıcı adı zaten mevcut")
+                return (False, "Bu kullanıcı adı zaten alınmış!")
             
             # Şifreyi guvenlik.py ile hashle
             sifre_ozeti = sifreyi_ozetle(sifre)
@@ -99,7 +99,7 @@ class KullaniciIslemleri(VeritabaniTabani):
             ''', (kullanici_adi, sifre_ozeti))
             
             conn.commit()
-            return (True, "Başarıyla kayıt olundu")
+            return (True, "Kayıt başarıyla tamamlandı!")
         
         except Exception as e:
             return (False, f"Kayıt sırasında hata oluştu: {str(e)}")
@@ -239,6 +239,114 @@ class AbonelikIslemleri(VeritabaniTabani):
             })
         
         return abonelikler
+    
+    def toplam_maliyet_hesapla(self, kullanici_id: int) -> float:
+        """
+        Belirtilen kullanıcının tüm aboneliklerinin toplam tutarını hesaplar.
+        
+        Parametreler:
+            kullanici_id (int): Kullanıcının ID'si
+        
+        Dönüş:
+            float: Tüm aboneliklerin toplam tutarı
+        """
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT SUM(tutar) FROM abonelikler 
+                WHERE kullanici_id = ?
+            ''', (kullanici_id,))
+            
+            sonuc = cursor.fetchone()[0]
+            conn.close()
+            
+            return sonuc if sonuc is not None else 0.0
+        
+        except Exception as e:
+            print(f"❌ Toplam maliyet hesaplanırken hata: {e}")
+            return 0.0
+    
+    def kategori_bazli_dagilim(self, kullanici_id: int) -> Dict[str, float]:
+        """
+        Belirtilen kullanıcının kategoriye göre harcama dağılımını hesaplar.
+        
+        Parametreler:
+            kullanici_id (int): Kullanıcının ID'si
+        
+        Dönüş:
+            Dict: Kategoriler ve tutarlarını içeren sözlük
+                  Örn: {'Eglence': 450, 'Egitim': 200}
+        """
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT kategori, SUM(tutar) as toplam_tutar
+                FROM abonelikler
+                WHERE kullanici_id = ?
+                GROUP BY kategori
+                ORDER BY toplam_tutar DESC
+            ''', (kullanici_id,))
+            
+            satirlar = cursor.fetchall()
+            conn.close()
+            
+            dagilim = {}
+            for satir in satirlar:
+                kategori = satir[0]
+                toplam_tutar = satir[1]
+                dagilim[kategori] = toplam_tutar
+            
+            return dagilim
+        
+        except Exception as e:
+            print(f"❌ Kategori dağılımı hesaplanırken hata: {e}")
+            return {}
+    
+    def yaklasan_odemeler(self, kullanici_id: int, limit: int = 3) -> List[Dict]:
+        """
+        Belirtilen kullanıcının ödeme tarihi en yakın olan abonelikleri getirir.
+        
+        Parametreler:
+            kullanici_id (int): Kullanıcının ID'si
+            limit (int): Kaç adet abonelik döndürülecek (varsayılan: 3)
+        
+        Dönüş:
+            List[Dict]: Tarih sırasına göre en yakın aboneliklerin listesi
+        """
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT id, servis_adi, tutar, odeme_tarihi, kategori
+                FROM abonelikler
+                WHERE kullanici_id = ?
+                ORDER BY odeme_tarihi ASC
+                LIMIT ?
+            ''', (kullanici_id, limit))
+            
+            satirlar = cursor.fetchall()
+            conn.close()
+            
+            odemeler = []
+            for satir in satirlar:
+                odemeler.append({
+                    'id': satir[0],
+                    'servis_adi': satir[1],
+                    'tutar': satir[2],
+                    'odeme_tarihi': satir[3],
+                    'kategori': satir[4]
+                })
+            
+            return odemeler
+        
+        except Exception as e:
+            print(f"❌ Yaklaşan ödemeler getirilirken hata: {e}")
+            return []
 
 
 

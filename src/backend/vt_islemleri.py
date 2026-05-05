@@ -12,37 +12,59 @@ class VeritabaniTabani:
     
     def baglanti_ac(self) -> sqlite3.Connection:
         """Veritabanına bağlantı açar."""
-        return sqlite3.connect(self.db_adi)
+        try:
+            return sqlite3.connect(self.db_adi)
+        except sqlite3.Error as e:
+            raise Exception(f"Veritabanı bağlantısı açılamadı: {str(e)}")
     
     def tablolari_kur(self):
         """Gerekli tabloları oluşturur."""
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
-        
-        # kullanicilar tablosu
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS kullanicilar (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kullanici_adi TEXT UNIQUE NOT NULL,
-                sifre_ozeti TEXT NOT NULL
-            )
-        ''')
-        
-        # abonelikler tablosu
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS abonelikler (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                servis_adi TEXT NOT NULL,
-                tutar REAL NOT NULL,
-                odeme_tarihi TEXT NOT NULL,
-                kategori TEXT NOT NULL,
-                kullanici_id INTEGER NOT NULL,
-                FOREIGN KEY (kullanici_id) REFERENCES kullanicilar (id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            # kullanicilar tablosu
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS kullanicilar (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kullanici_adi TEXT UNIQUE NOT NULL,
+                    sifre_ozeti TEXT NOT NULL,
+                    profil_foto TEXT DEFAULT 'default_avatar.png',
+                    butce_hedefi REAL DEFAULT 2000.0
+                )
+            ''')
+            
+            # Mevcut tabloda profil_foto veya butce_hedefi sütunu yoksa ekle
+            cursor.execute("PRAGMA table_info(kullanicilar)")
+            mevcut_sutunlar = [row[1] for row in cursor.fetchall()]
+            if 'profil_foto' not in mevcut_sutunlar:
+                cursor.execute('''
+                    ALTER TABLE kullanicilar ADD COLUMN profil_foto TEXT DEFAULT 'default_avatar.png'
+                ''')
+            if 'butce_hedefi' not in mevcut_sutunlar:
+                cursor.execute('''
+                    ALTER TABLE kullanicilar ADD COLUMN butce_hedefi REAL DEFAULT 2000.0
+                ''')
+            
+            # abonelikler tablosu
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS abonelikler (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    servis_adi TEXT NOT NULL,
+                    tutar REAL NOT NULL,
+                    odeme_tarihi TEXT NOT NULL,
+                    kategori TEXT NOT NULL,
+                    kullanici_id INTEGER NOT NULL,
+                    FOREIGN KEY (kullanici_id) REFERENCES kullanicilar (id)
+                )
+            ''')
+            
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            raise Exception(f"Tablolar oluşturulurken hata: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Beklenmeyen hata: {str(e)}")
 
 
 class KullaniciIslemleri(VeritabaniTabani):
@@ -72,8 +94,8 @@ class KullaniciIslemleri(VeritabaniTabani):
         if len(kullanici_adi) < 3:
             return (False, "Kullanıcı adı en az 3 karakter olmalıdır")
         
-        if len(sifre) < 4:
-            return (False, "Şifre en az 4 karakter olmalıdır")
+        if len(sifre) < 6:
+            return (False, "Şifre en az 6 karakter olmalıdır")
         
         # Veritabanına bağlan
         conn = self.baglanti_ac()
@@ -94,20 +116,25 @@ class KullaniciIslemleri(VeritabaniTabani):
             
             # Kullanıcıyı veritabanına ekle
             cursor.execute('''
-                INSERT INTO kullanicilar (kullanici_adi, sifre_ozeti)
-                VALUES (?, ?)
-            ''', (kullanici_adi, sifre_ozeti))
+                INSERT INTO kullanicilar (kullanici_adi, sifre_ozeti, profil_foto)
+                VALUES (?, ?, ?)
+            ''', (kullanici_adi, sifre_ozeti, 'default_avatar.png'))
             
             conn.commit()
             return (True, "Kayıt başarıyla tamamlandı!")
         
+        except sqlite3.IntegrityError:
+            return (False, "Bu kullanıcı adı zaten alınmış!")
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
         except Exception as e:
-            return (False, f"Kayıt sırasında hata oluştu: {str(e)}")
+            return (False, f"Kayıt sırasında beklenmeyen hata: {str(e)}")
         
         finally:
-            conn.close()
+            if 'conn' in locals():
+                conn.close()
     
-    def giris_yap(self, kullanici_adi: str, sifre: str) -> bool:
+    def giris_yap(self, kullanici_adi: str, sifre: str) -> tuple:
         """
         Kullanıcının girişini doğrular.
         
@@ -116,29 +143,151 @@ class KullaniciIslemleri(VeritabaniTabani):
             sifre (str): Giriş yapacak kullanıcının şifresi
         
         Dönüş:
-            bool: Giriş başarılıysa True, başarısızsa False
+            tuple: (başarı: bool, kullanici_id: int veya None, kullanici_adi: str veya None)
+                   Başarılı: (True, id, kullanici_adi)
+                   Başarısız: (False, None, None)
         """
-        # Veritabanına bağlan
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
+        try:
+            # Veritabanına bağlan
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            # Kullanıcıyı ara
+            cursor.execute('''
+                SELECT id, sifre_ozeti FROM kullanicilar WHERE kullanici_adi = ?
+            ''', (kullanici_adi,))
+            
+            sonuc = cursor.fetchone()
+            
+            # Kullanıcı bulunamadıysa False döner
+            if sonuc is None:
+                return (False, None, None)
+            
+            # Şifreyi doğrula
+            kullanici_id = sonuc[0]
+            kayitli_ozet = sonuc[1]
+            dogrulama_sonucu = sifreyi_dogrula(kayitli_ozet, sifre)
+            
+            if dogrulama_sonucu:
+                return (True, kullanici_id, kullanici_adi)
+            return (False, None, None)
         
-        # Kullanıcıyı ara
-        cursor.execute('''
-            SELECT id, sifre_ozeti FROM kullanicilar WHERE kullanici_adi = ?
-        ''', (kullanici_adi,))
-        
-        sonuc = cursor.fetchone()
-        conn.close()
-        
-        # Kullanıcı bulunamadıysa False döner
-        if sonuc is None:
-            return False
-        
-        # Şifreyi doğrula
-        kayitli_ozet = sonuc[1]
-        dogrulama_sonucu = sifreyi_dogrula(kayitli_ozet, sifre)
-        
-        return dogrulama_sonucu
+        except sqlite3.Error as e:
+            return (False, None, None)  # Giriş hatasında detay vermiyoruz güvenlik için
+        except Exception as e:
+            return (False, None, None)  # Giriş hatasında detay vermiyoruz güvenlik için
+        finally:
+            if 'conn' in locals():
+                conn.close()
+
+    def profil_bilgisi_getir(self, kullanici_id: int) -> tuple:
+        """Kullanıcının profil bilgilerini döner."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, kullanici_adi, profil_foto
+                FROM kullanicilar
+                WHERE id = ?
+            ''', (kullanici_id,))
+            satir = cursor.fetchone()
+
+            if satir is None:
+                return (False, "Kullanıcı bulunamadı.")
+
+            return (True, {
+                'id': satir[0],
+                'kullanici_adi': satir[1],
+                'profil_foto': satir[2]
+            })
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def profil_foto_guncelle(self, kullanici_id: int, yeni_yol: str) -> tuple:
+        """Kullanıcının profil fotoğrafı yolunu günceller."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE kullanicilar
+                SET profil_foto = ?
+                WHERE id = ?
+            ''', (yeni_yol, kullanici_id))
+            conn.commit()
+
+            if cursor.rowcount == 0:
+                return (False, "Kullanıcı bulunamadı.")
+            return (True, "Profil fotoğrafı güncellendi.")
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def butce_guncelle(self, kullanici_id: int, yeni_limit: float) -> tuple:
+        """Kullanıcının bütçe hedefini günceller."""
+        if yeni_limit is None:
+            return (False, "Yeni bütçe limiti boş olamaz.")
+        if not isinstance(yeni_limit, (int, float)):
+            return (False, "Bütçe limiti sayı olmalıdır.")
+        if yeni_limit < 0:
+            return (False, "Bütçe limiti negatif olamaz.")
+
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE kullanicilar
+                SET butce_hedefi = ?
+                WHERE id = ?
+            ''', (float(yeni_limit), kullanici_id))
+            conn.commit()
+
+            if cursor.rowcount == 0:
+                return (False, "Kullanıcı bulunamadı.")
+            return (True, "Bütçe hedefi başarıyla güncellendi.")
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def butce_getir(self, kullanici_id: int) -> tuple:
+        """Kullanıcının bütçe hedefini döner."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT COALESCE(butce_hedefi, 2000.0)
+                FROM kullanicilar
+                WHERE id = ?
+            ''', (kullanici_id,))
+            satir = cursor.fetchone()
+
+            if satir is None:
+                return (False, "Kullanıcı bulunamadı.")
+
+            return (True, float(satir[0]))
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 class AbonelikIslemleri(VeritabaniTabani):
@@ -148,20 +297,20 @@ class AbonelikIslemleri(VeritabaniTabani):
         super().__init__(db_adi)
     
     def ekle(self, servis_adi: str, tutar: float, tarih: str, 
-             kategori: str, kullanici_id: int):
+             kategori: str, kullanici_id: int) -> tuple:
         """
         Yeni bir abonelik ekler ve eklenen kaydın ID'sini döner.
-        Hata durumunda False döner.
+        Hata durumunda (False, hata_mesaji) döner.
         """
         conn = None
         try:
             # Tutar değerinin sayı olup olmadığını kontrol et
             if not isinstance(tutar, (int, float)):
-                raise ValueError(f"Tutar sayı olmalıdır, '{tutar}' tipi alındı.")
+                return (False, f"Tutar sayı olmalıdır, '{tutar}' tipi alındı.")
             
             # Tutar negatif olamaz
             if tutar < 0:
-                raise ValueError("Tutar negatif olamaz.")
+                return (False, "Tutar negatif olamaz.")
             
             # Parametreleri bir demet (tuple) olarak net bir şekilde veriyoruz
             veriler = (servis_adi, tutar, tarih, kategori, kullanici_id)
@@ -179,68 +328,83 @@ class AbonelikIslemleri(VeritabaniTabani):
             conn.commit()
             yeni_id = cursor.lastrowid
             
-            return yeni_id
+            return (True, yeni_id)
         
         except ValueError as e:
-            # Veri tipi hatası
-            print(f"❌ VERİ HATASI: {e}")
-            return False
+            return (False, f"Veri hatası: {str(e)}")
         
         except sqlite3.DatabaseError as e:
-            # Veritabanı hatası
-            print(f"❌ VERİTABANI HATASI: {e}")
-            return False
+            return (False, f"Veritabanı hatası: {str(e)}")
         
         except Exception as e:
-            # Diğer beklenmeyen hatalar
-            print(f"❌ BEKLENMEYEN HATA: {e}")
-            return False
+            return (False, f"Beklenmeyen hata: {str(e)}")
         
         finally:
             # Bağlantı her durumda kapatılır
             if conn is not None:
                 conn.close()
     
-    def sil(self, abone_id: int) -> bool:
+    def sil(self, abone_id: int) -> tuple:
         """Verilen ID'ye sahip aboneliği siler."""
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM abonelikler WHERE id = ?', (abone_id,))
+            conn.commit()
+            etkilenen_satir = cursor.rowcount
+            
+            if etkilenen_satir > 0:
+                return (True, "Abonelik başarıyla silindi.")
+            else:
+                return (False, "Silinecek abonelik bulunamadı.")
         
-        cursor.execute('DELETE FROM abonelikler WHERE id = ?', (abone_id,))
-        conn.commit()
-        etkilenen_satir = cursor.rowcount
-        conn.close()
-        
-        return etkilenen_satir > 0
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
     
-    def listele_hepsi(self, kullanici_id: int) -> List[Dict]:
+    def listele_hepsi(self, kullanici_id: int) -> tuple:
         """Bir kullanıcının tum aboneliklerini listeler."""
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT id, servis_adi, tutar, odeme_tarihi, kategori 
+                FROM abonelikler 
+                WHERE kullanici_id = ?
+                ORDER BY odeme_tarihi DESC
+            ''', (kullanici_id,))
+            
+            satirlar = cursor.fetchall()
+            
+            abonelikler = []
+            for satir in satirlar:
+                abonelikler.append({
+                    'id': satir[0],
+                    'servis_adi': satir[1],
+                    'tutar': satir[2],
+                    'odeme_tarihi': satir[3],
+                    'kategori': satir[4]
+                })
+            
+            return (True, abonelikler)
         
-        cursor.execute('''
-            SELECT id, servis_adi, tutar, odeme_tarihi, kategori 
-            FROM abonelikler 
-            WHERE kullanici_id = ?
-            ORDER BY odeme_tarihi DESC
-        ''', (kullanici_id,))
-        
-        satirlar = cursor.fetchall()
-        conn.close()
-        
-        abonelikler = []
-        for satir in satirlar:
-            abonelikler.append({
-                'id': satir[0],
-                'servis_adi': satir[1],
-                'tutar': satir[2],
-                'odeme_tarihi': satir[3],
-                'kategori': satir[4]
-            })
-        
-        return abonelikler
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
     
-    def toplam_maliyet_hesapla(self, kullanici_id: int) -> float:
+    def toplam_maliyet_hesapla(self, kullanici_id: int) -> tuple:
         """
         Belirtilen kullanıcının tüm aboneliklerinin toplam tutarını hesaplar.
         
@@ -248,8 +412,9 @@ class AbonelikIslemleri(VeritabaniTabani):
             kullanici_id (int): Kullanıcının ID'si
         
         Dönüş:
-            float: Tüm aboneliklerin toplam tutarı
+            tuple: (başarı: bool, toplam_tutar: float veya hata_mesaji: str)
         """
+        conn = None
         try:
             conn = self.baglanti_ac()
             cursor = conn.cursor()
@@ -260,15 +425,18 @@ class AbonelikIslemleri(VeritabaniTabani):
             ''', (kullanici_id,))
             
             sonuc = cursor.fetchone()[0]
-            conn.close()
             
-            return sonuc if sonuc is not None else 0.0
+            return (True, sonuc if sonuc is not None else 0.0)
         
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
         except Exception as e:
-            print(f"❌ Toplam maliyet hesaplanırken hata: {e}")
-            return 0.0
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
     
-    def kategori_bazli_dagilim(self, kullanici_id: int) -> Dict[str, float]:
+    def kategori_bazli_dagilim(self, kullanici_id: int) -> tuple:
         """
         Belirtilen kullanıcının kategoriye göre harcama dağılımını hesaplar.
         
@@ -276,9 +444,11 @@ class AbonelikIslemleri(VeritabaniTabani):
             kullanici_id (int): Kullanıcının ID'si
         
         Dönüş:
-            Dict: Kategoriler ve tutarlarını içeren sözlük
-                  Örn: {'Eglence': 450, 'Egitim': 200}
+            tuple: (başarı: bool, dagilim: Dict veya hata_mesaji: str)
+                  Başarılı: (True, {'Eglence': 450, 'Egitim': 200})
+                  Hata: (False, "hata mesajı")
         """
+        conn = None
         try:
             conn = self.baglanti_ac()
             cursor = conn.cursor()
@@ -292,7 +462,6 @@ class AbonelikIslemleri(VeritabaniTabani):
             ''', (kullanici_id,))
             
             satirlar = cursor.fetchall()
-            conn.close()
             
             dagilim = {}
             for satir in satirlar:
@@ -300,13 +469,17 @@ class AbonelikIslemleri(VeritabaniTabani):
                 toplam_tutar = satir[1]
                 dagilim[kategori] = toplam_tutar
             
-            return dagilim
+            return (True, dagilim)
         
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
         except Exception as e:
-            print(f"❌ Kategori dağılımı hesaplanırken hata: {e}")
-            return {}
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
     
-    def yaklasan_odemeler(self, kullanici_id: int, limit: int = 3) -> List[Dict]:
+    def yaklasan_odemeler(self, kullanici_id: int, limit: int = 3) -> tuple:
         """
         Belirtilen kullanıcının ödeme tarihi en yakın olan abonelikleri getirir.
         
@@ -315,8 +488,9 @@ class AbonelikIslemleri(VeritabaniTabani):
             limit (int): Kaç adet abonelik döndürülecek (varsayılan: 3)
         
         Dönüş:
-            List[Dict]: Tarih sırasına göre en yakın aboneliklerin listesi
+            tuple: (başarı: bool, odemeler: List[Dict] veya hata_mesaji: str)
         """
+        conn = None
         try:
             conn = self.baglanti_ac()
             cursor = conn.cursor()
@@ -330,7 +504,6 @@ class AbonelikIslemleri(VeritabaniTabani):
             ''', (kullanici_id, limit))
             
             satirlar = cursor.fetchall()
-            conn.close()
             
             odemeler = []
             for satir in satirlar:
@@ -342,11 +515,15 @@ class AbonelikIslemleri(VeritabaniTabani):
                     'kategori': satir[4]
                 })
             
-            return odemeler
+            return (True, odemeler)
         
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
         except Exception as e:
-            print(f"❌ Yaklaşan ödemeler getirilirken hata: {e}")
-            return []
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 
@@ -356,54 +533,107 @@ class AnalizMerkezi(VeritabaniTabani):
     def __init__(self, db_adi: str = 'subtrack.db'):
         super().__init__(db_adi)
     
-    def aylik_toplam_hesapla(self, kullanici_id: int, yil: int = None, ay: int = None) -> float:
+    def aylik_toplam_hesapla(self, kullanici_id: int, yil: int = None, ay: int = None) -> tuple:
         """Belirtilen ay için toplam abonelik maliyetini hesaplar."""
         if yil is None or ay is None:
             simdi = datetime.now()
             yil = simdi.year
             ay = simdi.month
         
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT SUM(tutar) FROM abonelikler 
+                WHERE kullanici_id = ? 
+                AND strftime('%Y-%m', odeme_tarihi) = ?
+            ''', (kullanici_id, f'{yil:04d}-{ay:02d}'))
+            
+            sonuc = cursor.fetchone()[0]
+            
+            return (True, sonuc if sonuc is not None else 0.0)
         
-        cursor.execute('''
-            SELECT SUM(tutar) FROM abonelikler 
-            WHERE kullanici_id = ? 
-            AND strftime('%Y-%m', odeme_tarihi) = ?
-        ''', (kullanici_id, f'{yil:04d}-{ay:02d}'))
-        
-        sonuc = cursor.fetchone()[0]
-        conn.close()
-        
-        return sonuc if sonuc is not None else 0.0
-    
-    def kategori_ozeti_getir(self, kullanici_id: int) -> List[Dict]:
-        """Aboneliklerin kategori özetini getirir."""
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT kategori, SUM(tutar) as toplam_tutar, COUNT(*) as abone_sayisi
-            FROM abonelikler
-            WHERE kullanici_id = ?
-            GROUP BY kategori
-            ORDER BY toplam_tutar DESC
-        ''', (kullanici_id,))
-        
-        satirlar = cursor.fetchall()
-        conn.close()
-        
-        kategoriler = []
-        for satir in satirlar:
-            kategoriler.append({
-                'kategori': satir[0],
-                'toplam_tutar': satir[1],
-                'abone_sayisi': satir[2]
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def butce_durumu_getir(self, kullanici_id: int) -> tuple:
+        """Kullanıcının bütçe durumu özetini döner."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT COALESCE(SUM(a.tutar), 0.0), COALESCE(k.butce_hedefi, 2000.0)
+                FROM kullanicilar k
+                LEFT JOIN abonelikler a ON a.kullanici_id = k.id
+                WHERE k.id = ?
+            ''', (kullanici_id,))
+
+            satir = cursor.fetchone()
+            if satir is None:
+                return (False, "Kullanıcı bulunamadı.")
+
+            toplam_harcama = float(satir[0])
+            butce_hedefi = float(satir[1]) if satir[1] is not None else 2000.0
+            oran = (toplam_harcama / butce_hedefi * 100.0) if butce_hedefi > 0 else 0.0
+
+            return (True, {
+                'toplam_harcama': toplam_harcama,
+                'butce_hedefi': butce_hedefi,
+                'butce_orani': round(oran, 2)
             })
-        
-        return kategoriler
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
     
-    def yaklasan_odemeleri_bul(self, kullanici_id: int, gun_sayisi: int = 3) -> List[Dict]:
+    def kategori_ozeti_getir(self, kullanici_id: int) -> tuple:
+        """Aboneliklerin kategori özetini getirir."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT kategori, SUM(tutar) as toplam_tutar, COUNT(*) as abone_sayisi
+                FROM abonelikler
+                WHERE kullanici_id = ?
+                GROUP BY kategori
+                ORDER BY toplam_tutar DESC
+            ''', (kullanici_id,))
+            
+            satirlar = cursor.fetchall()
+            
+            kategoriler = []
+            for satir in satirlar:
+                kategoriler.append({
+                    'kategori': satir[0],
+                    'toplam_tutar': satir[1],
+                    'abone_sayisi': satir[2]
+                })
+            
+            return (True, kategoriler)
+        
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
+    
+    def yaklasan_odemeleri_bul(self, kullanici_id: int, gun_sayisi: int = 3) -> tuple:
         """
         Belirtilen gün içinde ödeme tarihi olan abonelikleri bulur.
         
@@ -412,40 +642,49 @@ class AnalizMerkezi(VeritabaniTabani):
             gun_sayisi (int): Kaç gün içindeki ödemeleri bulsun (varsayılan: 3)
         
         Dönüş:
-            List[Dict]: Yaklaşan ödeme tarihi olan aboneliklerin listesi
+            tuple: (başarı: bool, odemeler: List[Dict] veya hata_mesaji: str)
         """
-        # Bugünün tarihini al
-        bugun = datetime.now()
+        conn = None
+        try:
+            # Bugünün tarihini al
+            bugun = datetime.now()
+            
+            # Yaklaşan ödeme tarihi sınırını hesapla
+            limit_tarihi = bugun + datetime.timedelta(days=gun_sayisi)
+            
+            # Bugün ile limit tarihi arasında ödeme olan abonelikleri ara
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT id, servis_adi, tutar, odeme_tarihi, kategori
+                FROM abonelikler
+                WHERE kullanici_id = ?
+                AND DATE(odeme_tarihi) BETWEEN DATE(?) AND DATE(?)
+                ORDER BY odeme_tarihi ASC
+            ''', (kullanici_id, bugun.strftime('%Y-%m-%d'), limit_tarihi.strftime('%Y-%m-%d')))
+            
+            satirlar = cursor.fetchall()
+            
+            yaklasan_odemeler = []
+            for satir in satirlar:
+                yaklasan_odemeler.append({
+                    'id': satir[0],
+                    'servis_adi': satir[1],
+                    'tutar': satir[2],
+                    'odeme_tarihi': satir[3],
+                    'kategori': satir[4]
+                })
+            
+            return (True, yaklasan_odemeler)
         
-        # Yaklaşan ödeme tarihi sınırını hesapla
-        limit_tarihi = bugun + datetime.timedelta(days=gun_sayisi)
-        
-        # Bugün ile limit tarihi arasında ödeme olan abonelikleri ara
-        conn = self.baglanti_ac()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, servis_adi, tutar, odeme_tarihi, kategori
-            FROM abonelikler
-            WHERE kullanici_id = ?
-            AND DATE(odeme_tarihi) BETWEEN DATE(?) AND DATE(?)
-            ORDER BY odeme_tarihi ASC
-        ''', (kullanici_id, bugun.strftime('%Y-%m-%d'), limit_tarihi.strftime('%Y-%m-%d')))
-        
-        satirlar = cursor.fetchall()
-        conn.close()
-        
-        yaklasan_odemeler = []
-        for satir in satirlar:
-            yaklasan_odemeler.append({
-                'id': satir[0],
-                'servis_adi': satir[1],
-                'tutar': satir[2],
-                'odeme_tarihi': satir[3],
-                'kategori': satir[4]
-            })
-        
-        return yaklasan_odemeler
+        except sqlite3.Error as e:
+            return (False, f"Veritabanı hatası: {str(e)}")
+        except Exception as e:
+            return (False, f"Beklenmeyen hata: {str(e)}")
+        finally:
+            if conn is not None:
+                conn.close()
     
 if __name__ == "__main__":
     # Test için nesneleri oluşturuyoruz
@@ -453,8 +692,11 @@ if __name__ == "__main__":
     analiz = AnalizMerkezi()
     
     # MANUEL VERİ GİRİŞİ (Deneme yapıyoruz)
-    print("Veri ekleniyor...")
-    islem.ekle("Netflix", 189.90, "2026-05-15", "Eglence", 1)
+    print("Demo veriler ekleniyor...")
+    islem.ekle("Netflix", 189.90, "2026-05-15", "Eğlence", 1)
+    islem.ekle("Spotify", 29.90, "2026-05-20", "Eğlence", 1)
+    islem.ekle("ChatGPT Plus", 99.00, "2026-05-10", "Yazılım", 1)
+    islem.ekle("Udemy", 149.90, "2026-05-25", "Eğitim", 1)
     
     # VERİLERİ ÇEKİP TERMİNALDE GÖRME
     liste = islem.listele_hepsi(1)

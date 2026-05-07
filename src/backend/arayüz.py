@@ -833,36 +833,328 @@ class App(tk.Tk):
         self.ekle_msg.config(text="")
 
     # ════════════════════════════════════════════════════════════
-    # TAB: PROFİLİM
+    # TAB: PROFİLİM – Hesap Yönetim Paneli
     # ════════════════════════════════════════════════════════════
     def _tab_profil(self):
         self._clear_main()
         self._set_active_nav(2)
 
+        # ── Üst başlık ────────────────────────────────────────
         outer = tk.Frame(self.main_area, bg=BG)
         outer.pack(fill="both", expand=True, padx=30, pady=24)
 
-        tk.Label(outer, text="Profilim", bg=BG, fg=TEXT,
-                 font=FONT_H2).pack(anchor="w")
-        tk.Label(outer, text="Kişisel hesabını ve profil fotoğrafını yönet.",
+        baslik_row = tk.Frame(outer, bg=BG)
+        baslik_row.pack(fill="x", anchor="w")
+        tk.Label(baslik_row, text="Hesap Yönetim Paneli", bg=BG, fg=TEXT,
+                 font=FONT_H2).pack(side="left")
+        tk.Label(baslik_row,
+                 text=f"  ●  Son giriş: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+                 bg=BG, fg=MUTED, font=FONT_SMALL).pack(side="left", padx=(12, 0), pady=4)
+        tk.Label(outer, text="Profilini, finansal özetini ve uygulama tercihlerini buradan yönet.",
                  bg=BG, fg=MUTED, font=FONT_SMALL).pack(anchor="w", pady=(2, 16))
 
-        card = tk.Frame(outer, bg=CARD, highlightthickness=1,
-                        highlightbackground=BORDER)
-        card.pack(fill="x", ipady=24)
+        # ── Ana iki sütun çerçevesi ───────────────────────────
+        iki_sutun = tk.Frame(outer, bg=BG)
+        iki_sutun.pack(fill="both", expand=True)
+        iki_sutun.columnconfigure(0, weight=0)
+        iki_sutun.columnconfigure(1, weight=1)
 
+        # ════════════════════════════════════════════════════
+        # SOL SÜTUN – Profil Kartı
+        # ════════════════════════════════════════════════════
+        sol = tk.Frame(iki_sutun, bg=CARD2, highlightthickness=1,
+                       highlightbackground=BORDER, width=220)
+        sol.grid(row=0, column=0, sticky="ns", padx=(0, 14), pady=0)
+        sol.pack_propagate(False)
+        sol.grid_propagate(False)
+
+        # Profil fotoğrafı
         img = self._get_profile_image(size=(120, 120))
-        foto_frame = tk.Frame(card, bg=CARD)
-        foto_frame.pack(pady=(12, 10))
-        foto_label = tk.Label(foto_frame, image=img, bg=CARD)
+        foto_cerceve = tk.Frame(sol, bg=ACCENT, width=124, height=124)
+        foto_cerceve.pack(pady=(28, 0))
+        foto_cerceve.pack_propagate(False)
+        foto_ic = tk.Frame(foto_cerceve, bg=CARD2, width=120, height=120)
+        foto_ic.place(x=2, y=2)
+        foto_ic.pack_propagate(False)
+        foto_label = tk.Label(foto_ic, image=img, bg=CARD2)
         foto_label.image = img
-        foto_label.pack()
+        foto_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(card, text=f"@{self.current_username}".upper(), bg=CARD,
-                 fg=TEXT, font=("Helvetica", 16, "bold")).pack(pady=(10, 4))
+        # Kullanıcı adı
+        tk.Label(sol, text=f"@{self.current_username}", bg=CARD2,
+                 fg=ACCENT, font=FONT_H3).pack(pady=(14, 2))
+        tk.Label(sol, text="SubTrack Kullanıcısı", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL).pack(pady=(0, 4))
 
-        styled_button(card, "Fotoğrafı Değiştir", self._change_profile_photo,
-                      color=ACCENT, width=18, pady=10).pack(pady=(8, 16))
+        # Ayırıcı
+        tk.Frame(sol, bg=BORDER, height=1).pack(fill="x", padx=18, pady=12)
+
+        # Üyelik rozeti
+        rozet = tk.Frame(sol, bg="#1A2E1A", highlightthickness=1,
+                         highlightbackground=SUCCESS)
+        rozet.pack(padx=18, fill="x")
+        tk.Label(rozet, text="✅  Aktif Üye", bg="#1A2E1A",
+                 fg=SUCCESS, font=FONT_SMALL).pack(pady=6)
+
+        tk.Frame(sol, bg=BORDER, height=1).pack(fill="x", padx=18, pady=12)
+
+        # Fotoğraf değiştir butonu
+        styled_button(sol, "📷  Fotoğrafı Değiştir",
+                      self._change_profile_photo,
+                      color=ACCENT, width=18, pady=8).pack(padx=18)
+
+        # Sürüm bilgisi (alt)
+        tk.Label(sol, text="SubTrack v2.0", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL).pack(pady=(20, 8))
+        tk.Label(sol, text="🔒 SHA-256 Korumalı", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL).pack(pady=(0, 28))
+
+        # ════════════════════════════════════════════════════
+        # SAĞ SÜTUN – Detay Paneli (ScrollFrame ile)
+        # ════════════════════════════════════════════════════
+        sag_wrap = tk.Frame(iki_sutun, bg=BG)
+        sag_wrap.grid(row=0, column=1, sticky="nsew")
+
+        sf = ScrollFrame(sag_wrap, bg=BG)
+        sf.pack(fill="both", expand=True)
+        sag = sf.inner
+        sag.config(padx=4, pady=0)
+
+        # ── Backend verileri ──────────────────────────────
+        bas1, toplam_maliyet = self.abonelik_motoru.toplam_maliyet_hesapla(
+            self.current_user_id)
+        bas2, abonelik_listesi = self.abonelik_motoru.listele_hepsi(
+            self.current_user_id)
+        bas3, butce_veri = self.analiz_motoru.butce_durumu_getir(
+            self.current_user_id)
+
+        aylik_toplam   = toplam_maliyet if bas1 else 0.0
+        abonelik_sayisi = len(abonelik_listesi) if bas2 else 0
+        yillik_tahmini  = aylik_toplam * 12
+
+        # ════════════════════════════════════════════════
+        # BÖLÜM 1 – Finansal İstatistikler
+        # ════════════════════════════════════════════════
+        tk.Label(sag, text="📊  Finansal İstatistikler",
+                 bg=BG, fg=ACCENT, font=FONT_H3).pack(anchor="w", pady=(0, 10))
+
+        istat_row = tk.Frame(sag, bg=BG)
+        istat_row.pack(fill="x")
+
+        def _istat_kart(parent, ikon, baslik, deger, renk, alt_bilgi=""):
+            k = tk.Frame(parent, bg=CARD2, highlightthickness=1,
+                         highlightbackground=BORDER)
+            k.pack(side="left", expand=True, fill="x", padx=(0, 10), ipady=14, ipadx=6)
+            # Renk şeridi üst
+            tk.Frame(k, bg=renk, height=3).pack(fill="x")
+            tk.Label(k, text=ikon, bg=CARD2, fg=renk,
+                     font=("Helvetica", 20)).pack(pady=(10, 2))
+            tk.Label(k, text=deger, bg=CARD2, fg=renk,
+                     font=("Helvetica", 16, "bold")).pack()
+            tk.Label(k, text=baslik, bg=CARD2, fg=TEXT,
+                     font=FONT_SMALL).pack(pady=(2, 0))
+            if alt_bilgi:
+                tk.Label(k, text=alt_bilgi, bg=CARD2, fg=MUTED,
+                         font=FONT_SMALL).pack(pady=(2, 6))
+
+        _istat_kart(istat_row, "📦",
+                    "Kayıtlı Abonelik",
+                    f"{abonelik_sayisi} Aktif",
+                    ACCENT,
+                    "toplam kayıt")
+        _istat_kart(istat_row, "💳",
+                    "Toplam Aylık Yük",
+                    f"₺{aylik_toplam:,.2f}",
+                    WARNING,
+                    "bu ay tahmini")
+        _istat_kart(istat_row, "📅",
+                    "Yıllık Tahmin",
+                    f"₺{yillik_tahmini:,.2f}",
+                    ACCENT2,
+                    "mevcut aboneliklere göre")
+
+        # Ayırıcı
+        tk.Frame(sag, bg=BORDER, height=1).pack(fill="x", pady=18)
+
+        # ════════════════════════════════════════════════
+        # BÖLÜM 2 – Hesap Ayarları
+        # ════════════════════════════════════════════════
+        tk.Label(sag, text="⚙️  Hesap Ayarları",
+                 bg=BG, fg=ACCENT, font=FONT_H3).pack(anchor="w", pady=(0, 10))
+
+        hesap_kart = tk.Frame(sag, bg=CARD2, highlightthickness=1,
+                              highlightbackground=BORDER)
+        hesap_kart.pack(fill="x")
+
+        # Durum satırı
+        durum_row = tk.Frame(hesap_kart, bg=CARD2)
+        durum_row.pack(fill="x", padx=16, pady=(14, 8))
+        tk.Label(durum_row, text="Hesap Durumu:", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL).pack(side="left")
+        tk.Label(durum_row, text="  ●  Aktif  ", bg=CARD2,
+                 fg=SUCCESS, font=FONT_SMALL).pack(side="left")
+        tk.Label(durum_row, text="🔒 SHA-256 Korumalı", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL).pack(side="left", padx=6)
+
+        tk.Frame(hesap_kart, bg=BORDER, height=1).pack(fill="x", padx=16)
+
+        # Kullanıcı adı satırı
+        kullanici_row = tk.Frame(hesap_kart, bg=CARD2)
+        kullanici_row.pack(fill="x", padx=16, pady=10)
+        tk.Label(kullanici_row, text="👤  Kullanıcı Adı:", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL, width=16, anchor="w").pack(side="left")
+        tk.Label(kullanici_row, text=f"@{self.current_username}", bg=CARD2,
+                 fg=TEXT, font=FONT_H3).pack(side="left")
+
+        tk.Frame(hesap_kart, bg=BORDER, height=1).pack(fill="x", padx=16)
+
+        # Şifre güncelle satırı
+        sifre_row = tk.Frame(hesap_kart, bg=CARD2)
+        sifre_row.pack(fill="x", padx=16, pady=12)
+        tk.Label(sifre_row, text="🔑  Şifre:", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL, width=16, anchor="w").pack(side="left")
+        tk.Label(sifre_row, text="••••••••••", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL).pack(side="left")
+        sifre_btn = tk.Label(sifre_row, text="  Şifreyi Güncelle →",
+                             bg=CARD2, fg=ACCENT, font=FONT_LINK, cursor="hand2")
+        sifre_btn.pack(side="left", padx=12)
+        sifre_btn.bind("<Button-1>", lambda e: self._sifre_guncelle_modal())
+
+        tk.Frame(hesap_kart, bg=BORDER, height=1).pack(fill="x", padx=16)
+
+        # Hesap oluşturma tarihi satırı (dekoratif)
+        tarih_row = tk.Frame(hesap_kart, bg=CARD2)
+        tarih_row.pack(fill="x", padx=16, pady=(10, 16))
+        tk.Label(tarih_row, text="📅  Kayıt Tarihi:", bg=CARD2,
+                 fg=MUTED, font=FONT_SMALL, width=16, anchor="w").pack(side="left")
+        tk.Label(tarih_row, text=datetime.now().strftime("%d %B %Y"), bg=CARD2,
+                 fg=TEXT, font=FONT_SMALL).pack(side="left")
+
+        # Ayırıcı
+        tk.Frame(sag, bg=BORDER, height=1).pack(fill="x", pady=18)
+
+        # ════════════════════════════════════════════════
+        # BÖLÜM 3 – Uygulama Tercihleri
+        # ════════════════════════════════════════════════
+        tk.Label(sag, text="🎛️  Uygulama Tercihleri",
+                 bg=BG, fg=ACCENT, font=FONT_H3).pack(anchor="w", pady=(0, 10))
+
+        tercih_kart = tk.Frame(sag, bg=CARD2, highlightthickness=1,
+                               highlightbackground=BORDER)
+        tercih_kart.pack(fill="x")
+
+        def _tercih_satiri(parent, ikon, etiket, widget_fn):
+            satir = tk.Frame(parent, bg=CARD2)
+            satir.pack(fill="x", padx=16, pady=8)
+            tk.Label(satir, text=f"{ikon}  {etiket}", bg=CARD2,
+                     fg=TEXT, font=FONT_SMALL, width=24, anchor="w").pack(side="left")
+            widget_fn(satir)
+            tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=16)
+
+        # Bildirimler toggle
+        self._bildirim_var = tk.StringVar(value="Açık")
+        def _bildirim_widget(p):
+            cb = ttk.Combobox(p, textvariable=self._bildirim_var,
+                              values=["Açık", "Kapalı"],
+                              state="readonly", width=10,
+                              font=FONT_SMALL)
+            cb.pack(side="right")
+        _tercih_satiri(tercih_kart, "🔔", "Bildirimler", _bildirim_widget)
+
+        # Para birimi seçimi
+        self._para_var = tk.StringVar(value="TL (₺)")
+        def _para_widget(p):
+            cb = ttk.Combobox(p, textvariable=self._para_var,
+                              values=["TL (₺)", "USD ($)", "EUR (€)", "GBP (£)"],
+                              state="readonly", width=10,
+                              font=FONT_SMALL)
+            cb.pack(side="right")
+        _tercih_satiri(tercih_kart, "💱", "Para Birimi", _para_widget)
+
+        # Tema seçimi (görsel, placeholder)
+        self._tema_var = tk.StringVar(value="Koyu Tema")
+        def _tema_widget(p):
+            cb = ttk.Combobox(p, textvariable=self._tema_var,
+                              values=["Koyu Tema", "Açık Tema (Yakında)"],
+                              state="readonly", width=16,
+                              font=FONT_SMALL)
+            cb.pack(side="right")
+        _tercih_satiri(tercih_kart, "🎨", "Tema", _tema_widget)
+
+        # Dil seçimi (görsel, placeholder)
+        self._dil_var = tk.StringVar(value="Türkçe")
+        def _dil_widget(p):
+            cb = ttk.Combobox(p, textvariable=self._dil_var,
+                              values=["Türkçe", "English (Yakında)"],
+                              state="readonly", width=16,
+                              font=FONT_SMALL)
+            cb.pack(side="right")
+        _tercih_satiri(tercih_kart, "🌐", "Dil / Language", _dil_widget)
+
+        # Son boşluk
+        tk.Frame(tercih_kart, bg=CARD2, height=6).pack()
+
+        # Alt kaydetme butonu (placeholder)
+        kaydet_row = tk.Frame(sag, bg=BG)
+        kaydet_row.pack(fill="x", pady=18)
+        styled_button(kaydet_row, "💾  Tercihleri Kaydet",
+                      lambda: messagebox.showinfo(
+                          "Bilgi", "Tercihler kaydedildi! (Bu sürümde görseldir.)"),
+                      color=SUCCESS, width=22, pady=8).pack(side="left")
+
+    # ── Şifre güncelle modal ──────────────────────────────────
+    def _sifre_guncelle_modal(self):
+        modal = tk.Toplevel(self)
+        modal.title("Şifre Güncelle")
+        modal.configure(bg=CARD)
+        modal.resizable(False, False)
+        modal.grab_set()
+
+        w, h = 400, 300
+        modal.update_idletasks()
+        sw, sh = modal.winfo_screenwidth(), modal.winfo_screenheight()
+        modal.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+
+        tk.Label(modal, text="🔑  Şifre Güncelle", bg=CARD,
+                 fg=TEXT, font=FONT_H2).pack(pady=(24, 16))
+
+        tk.Label(modal, text="MEVCUT ŞİFRE", bg=CARD,
+                 fg=MUTED, font=FONT_LABEL, anchor="w").pack(fill="x", padx=32)
+        eski_pw = styled_entry(modal, "Mevcut şifreniz", show_char="•")
+        eski_pw.pack(padx=32, pady=(4, 10), ipady=6, fill="x")
+
+        tk.Label(modal, text="YENİ ŞİFRE", bg=CARD,
+                 fg=MUTED, font=FONT_LABEL, anchor="w").pack(fill="x", padx=32)
+        yeni_pw = styled_entry(modal, "En az 6 karakter", show_char="•")
+        yeni_pw.pack(padx=32, pady=(4, 10), ipady=6, fill="x")
+
+        mesaj_lbl = tk.Label(modal, text="", bg=CARD,
+                             fg=ERROR, font=FONT_SMALL)
+        mesaj_lbl.pack()
+
+        def _kaydet():
+            eski = eski_pw.get_value()
+            yeni = yeni_pw.get_value()
+            if not eski or not yeni:
+                mesaj_lbl.config(text="Lütfen tüm alanları doldurun.", fg=ERROR)
+                return
+            if len(yeni) < 6:
+                mesaj_lbl.config(text="Yeni şifre en az 6 karakter olmalı.", fg=ERROR)
+                return
+            bas, mesaj = self.kullanici_motoru.sifre_guncelle(
+                self.current_user_id, eski, yeni)
+            if bas:
+                mesaj_lbl.config(text="✅ Şifre başarıyla güncellendi!", fg=SUCCESS)
+                modal.after(1500, modal.destroy)
+            else:
+                mesaj_lbl.config(text=mesaj or "Güncelleme başarısız.", fg=ERROR)
+
+        btn_row = tk.Frame(modal, bg=CARD)
+        btn_row.pack(pady=12)
+        styled_button(btn_row, "Kaydet", _kaydet,
+                      color=SUCCESS, width=12, pady=7).pack(side="left", padx=6)
+        styled_button(btn_row, "İptal", modal.destroy,
+                      color=MUTED, width=10, pady=7).pack(side="left", padx=6)
 
     # ════════════════════════════════════════════════════════════
     # TAB: ABONELİKLERİM – [YENİ] Tik Butonu + Görsel Geri Bildirim

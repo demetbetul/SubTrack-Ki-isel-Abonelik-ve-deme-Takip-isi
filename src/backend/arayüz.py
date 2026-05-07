@@ -1,5 +1,6 @@
 import tkinter as tk
 import os
+import threading
 from tkinter import ttk, messagebox, filedialog
 import re
 from PIL import Image, ImageTk, ImageDraw
@@ -180,6 +181,9 @@ class App(tk.Tk):
         self.current_user_id   = None
         self.current_username  = None
 
+        # ── [YENİ] Bildirim döngüsü için flag ──────────────────
+        self._bildirim_aktif = False
+
         self._show_login()
 
     def _center(self, w, h):
@@ -340,6 +344,10 @@ class App(tk.Tk):
         self._clear()
         self._center(960, 680)
 
+        # ── [YENİ] Ayın 1'inde otomatik sıfırlama ──────────────
+        if datetime.now().day == 1:
+            self.abonelik_motoru.aylik_odeme_sifirla(self.current_user_id)
+
         # ── Sol kenar çubuğu ──────────────────────────────────
         sidebar = tk.Frame(self, bg=CARD, width=200)
         sidebar.pack(side="left", fill="y")
@@ -391,8 +399,10 @@ class App(tk.Tk):
 
         self._tab_genel()
 
-        # ── Uygulama açılışında bildirim gönder ──────────────
+        # ── [YENİ] Bildirim sistemi: açılışta + her 1 saatte bir ──
+        self._bildirim_aktif = True
         self.after(1500, self._bildirim_gonder)
+        self._bildirim_dongusunu_baslat()
 
     def _set_active_nav(self, index):
         for i, b in enumerate(self.nav_btns):
@@ -410,13 +420,37 @@ class App(tk.Tk):
             w.destroy()
 
     # ════════════════════════════════════════════════════════════
-    # BİLDİRİM SİSTEMİ (win10toast)
+    # [YENİ] BİLDİRİM SİSTEMİ – Toast + Uygulama İçi Popup
     # ════════════════════════════════════════════════════════════
+    def _bildirim_dongusunu_baslat(self):
+        """
+        Arka planda (thread) her 1 saatte bir ödeme kontrolü yapar.
+        Döngü, kullanıcı çıkış yapana kadar (self._bildirim_aktif=False) çalışır.
+        """
+        def _dongu():
+            import time
+            while self._bildirim_aktif:
+                # 1 saat = 3600 saniye; 60'ar saniyelik dilimlerle kontrol
+                for _ in range(3600):
+                    if not self._bildirim_aktif:
+                        return
+                    time.sleep(1)
+                # after() ile Tkinter thread-safe çağrı
+                if self._bildirim_aktif:
+                    self.after(0, self._bildirim_gonder)
+
+        t = threading.Thread(target=_dongu, daemon=True)
+        t.start()
+
     def _bildirim_gonder(self):
         """
-        Uygulama açıldığında yarın ödeme tarihi olan abonelikleri kontrol eder.
-        win10toast kuruluysa Windows bildirimi, değilse uygulama içi uyarı gösterir.
+        Yarın ödeme tarihi olan abonelikleri bulur ve çift katmanlı bildirim gönderir:
+          1. Win10Toast (Windows sistem bildirimi) – kuruluysa
+          2. Uygulama içi şık TopLevel popup – her zaman gösterilir
         """
+        if not self.current_user_id:
+            return
+
         bas, odemeler = self.abonelik_motoru.yarin_odemeleri_bul(self.current_user_id)
         if not bas or not odemeler:
             return
@@ -425,24 +459,79 @@ class App(tk.Tk):
             f"• {o['servis_adi']}  ₺{o['tutar']:,.2f}" for o in odemeler
         )
 
+        # ── Katman 1: Win10Toast (Windows sistem bildirimi) ────
         if _TOAST_AVAILABLE:
             try:
-                toaster = ToastNotifier()
-                baslik = f"SubTrack – {len(odemeler)} Ödeme Yarın!"
-                mesaj = f"Yarın ödenecek abonelikler:\n{mesaj_listesi}"
-                # threaded=True: UI'yi bloke etmez
-                toaster.show_toast(baslik, mesaj, duration=8, threaded=True)
+                def _toast_gonder():
+                    toaster = ToastNotifier()
+                    baslik = f"SubTrack – {len(odemeler)} Ödeme Yarın!"
+                    mesaj = f"Yarın ödenecek abonelikler:\n{mesaj_listesi}"
+                    toaster.show_toast(baslik, mesaj, duration=8, threaded=False)
+                threading.Thread(target=_toast_gonder, daemon=True).start()
             except Exception:
-                # Bildirim gönderilemezse sessizce geç
                 pass
-        else:
-            # Fallback: Uygulama içi popup
-            isimler = ", ".join(o['servis_adi'] for o in odemeler)
-            messagebox.showwarning(
-                "⏰ Yaklaşan Ödeme Hatırlatıcısı",
-                f"Yarın ödeme tarihi olan abonelikleriniz:\n\n{mesaj_listesi}\n\n"
-                f"(Windows bildirimleri için: pip install win10toast)"
-            )
+
+        # ── Katman 2: Uygulama içi şık TopLevel popup ──────────
+        self._bildirim_popup_goster(len(odemeler), mesaj_listesi)
+
+    def _bildirim_popup_goster(self, adet, mesaj_listesi):
+        """
+        Otomatik kapanan, şık bir uygulama içi bildirim popup'ı.
+        Sağ alt köşeye konumlanır, 6 saniye sonra kaybolur.
+        """
+        popup = tk.Toplevel(self)
+        popup.overrideredirect(True)   # Başlık çubuğu yok
+        popup.configure(bg=CARD2)
+        popup.attributes("-topmost", True)
+
+        # Boyut & konum (sağ alt köşe)
+        pw, ph = 320, 120 + adet * 22
+        popup.update_idletasks()
+        sw = popup.winfo_screenwidth()
+        sh = popup.winfo_screenheight()
+        popup.geometry(f"{pw}x{ph}+{sw - pw - 20}+{sh - ph - 60}")
+
+        # Çerçeve
+        frame = tk.Frame(popup, bg=CARD2, highlightthickness=2,
+                         highlightbackground=WARNING)
+        frame.pack(fill="both", expand=True)
+
+        # Başlık
+        baslik_row = tk.Frame(frame, bg=CARD2)
+        baslik_row.pack(fill="x", padx=12, pady=(10, 4))
+        tk.Label(baslik_row, text="⏰  Yarın Ödeme Var!",
+                 bg=CARD2, fg=WARNING, font=FONT_H3).pack(side="left")
+        kapat_btn = tk.Label(baslik_row, text="✕", bg=CARD2, fg=MUTED,
+                              font=FONT_H3, cursor="hand2")
+        kapat_btn.pack(side="right")
+        kapat_btn.bind("<Button-1>", lambda e: popup.destroy())
+
+        # Ödemeler listesi
+        tk.Label(frame, text=mesaj_listesi, bg=CARD2, fg=TEXT,
+                 font=FONT_SMALL, justify="left",
+                 wraplength=290).pack(anchor="w", padx=14, pady=(0, 10))
+
+        # Geri sayım çubuğu
+        progress_frame = tk.Frame(frame, bg=ENTRY_BG, height=4)
+        progress_frame.pack(fill="x", side="bottom")
+        progress_bar = tk.Frame(progress_frame, bg=WARNING, height=4)
+        progress_bar.place(relwidth=1.0, relheight=1.0)
+
+        # 6 saniyede otomatik kapat + animasyon
+        toplam_ms = 6000
+        adim_ms   = 100
+
+        def _geri_say(kalan_ms):
+            if not popup.winfo_exists():
+                return
+            if kalan_ms <= 0:
+                popup.destroy()
+                return
+            oran = kalan_ms / toplam_ms
+            progress_bar.place(relwidth=oran, relheight=1.0)
+            popup.after(adim_ms, lambda: _geri_say(kalan_ms - adim_ms))
+
+        popup.after(adim_ms, lambda: _geri_say(toplam_ms - adim_ms))
 
     # ════════════════════════════════════════════════════════════
     # TAB: GENEL BAKIŞ
@@ -474,17 +563,29 @@ class App(tk.Tk):
         katlar = katlar if bas4 else []
         butce  = butce  if bas5 else {'toplam_harcama': 0.0, 'butce_hedefi': 2000.0, 'butce_orani': 0.0}
 
+        # ── [YENİ] Ödenen tutarı hesapla (bütçe senkronizasyonu) ──
+        odenen_toplam = sum(
+            item['tutar'] for item in liste if item.get('odendi_mi')
+        )
+        odenmemis_toplam = toplam - odenen_toplam
+
         # ── Özet kartları ──
         kart_satir = tk.Frame(inner, bg=BG)
         kart_satir.pack(fill="x", pady=(0, 16))
 
         self._ozet_kart(kart_satir, "💳  Toplam Aylık",   f"₺{toplam:,.2f}", ACCENT)
-        self._ozet_kart(kart_satir, "📦  Aktif Abonelik", str(len(liste)),    ACCENT2)
-        ortalama = (toplam / len(liste)) if liste else 0
-        self._ozet_kart(kart_satir, "📈  Ortalama",       f"₺{ortalama:,.2f}", SUCCESS)
+        self._ozet_kart(kart_satir, "✅  Ödendi",          f"₺{odenen_toplam:,.2f}", SUCCESS)
+        self._ozet_kart(kart_satir, "⏳  Bekliyor",        f"₺{odenmemis_toplam:,.2f}", WARNING)
 
         # ── Dinamik Bütçe Çubuğu ──
-        self._butce_takip_cubugu(inner, butce)
+        # Bütçe çubuğu: ödenmemis tutar üzerinden hesapla
+        butce_guncellenmis = dict(butce)
+        butce_guncellenmis['toplam_harcama'] = odenmemis_toplam
+        if butce_guncellenmis['butce_hedefi'] > 0:
+            butce_guncellenmis['butce_orani'] = round(
+                odenmemis_toplam / butce_guncellenmis['butce_hedefi'] * 100, 2
+            )
+        self._butce_takip_cubugu(inner, butce_guncellenmis, odenen_toplam)
 
         # ── İptal Önerisi ──
         self._iptal_onerisi_goster(inner)
@@ -558,19 +659,18 @@ class App(tk.Tk):
         tk.Label(row, text=f"₺{k['toplam_tutar']:,.2f}", bg=BG,
                  fg=renk, font=FONT_SMALL).pack(side="left", padx=6)
 
-    # ── Dinamik Bütçe Çubuğu (Yeşil→Sarı→Kırmızı) ───────────
-    def _butce_takip_cubugu(self, parent, butce):
+    # ── [YENİ] Dinamik Bütçe Çubuğu (Ödendi/Bekliyor ayrımıyla) ──
+    def _butce_takip_cubugu(self, parent, butce, odenen_toplam=0.0):
         """
         Harcama oranına göre renk değiştiren dinamik bütçe çubuğu.
+        Ödenen tutar yeşil, kalan (ödenmemiş) tutar asıl bar rengiyle gösterilir.
         %0-69: Yeşil | %70-89: Sarı | %90+: Kırmızı
-        Bütçe aşıldıysa negatif farkı ve uyarı mesajını gösterir.
         """
-        harcama = butce.get('toplam_harcama', 0.0)
+        harcama = butce.get('toplam_harcama', 0.0)  # Ödenmemiş kısmı
         hedef   = butce.get('butce_hedefi', 2000.0)
         oran    = butce.get('butce_orani', 0.0)
         fark    = hedef - harcama
 
-        # Renk seçimi
         if oran < 70:
             bar_renk = SUCCESS
             durum_ikon = "✅"
@@ -584,13 +684,11 @@ class App(tk.Tk):
         container = tk.Frame(parent, bg=BG)
         container.pack(fill="x", pady=(16, 0))
 
-        # Başlık satırı
         baslik_row = tk.Frame(container, bg=BG)
         baslik_row.pack(fill="x")
         tk.Label(baslik_row, text=f"{durum_ikon}  Bütçe İzleme", bg=BG, fg=TEXT,
                  font=FONT_H3).pack(side="left")
 
-        # Bütçe güncelle butonu
         guncelle_btn = tk.Label(
             baslik_row, text="✏️ Bütçeyi Güncelle", bg=BG, fg=ACCENT,
             font=FONT_LINK, cursor="hand2"
@@ -604,32 +702,47 @@ class App(tk.Tk):
         bar_frame.pack_propagate(False)
 
         if hedef > 0:
-            dolu_yuzde = min(oran, 100.0)
-            dolu_frame = tk.Frame(bar_frame, bg=bar_renk, height=28)
-            dolu_frame.place(relwidth=dolu_yuzde / 100.0, relheight=1)
+            toplam_harcama = harcama + odenen_toplam
 
-        # İçerik etiketi (progress bar üstünde)
+            # Ödenen kısım (koyu yeşil) – sol taraf
+            odenen_oran = min(odenen_toplam / hedef, 1.0)
+            if odenen_oran > 0:
+                odenen_frame = tk.Frame(bar_frame, bg="#22C55E", height=28)
+                odenen_frame.place(relwidth=odenen_oran, relheight=1.0, relx=0)
+
+            # Ödenmemiş kısım – ödenen kısmın sağına başlar
+            bekleyen_oran = min(harcama / hedef, 1.0 - odenen_oran)
+            if bekleyen_oran > 0:
+                bekleyen_frame = tk.Frame(bar_frame, bg=bar_renk, height=28)
+                bekleyen_frame.place(relwidth=bekleyen_oran, relheight=1.0, relx=odenen_oran)
+
+        toplam_gosterim = harcama + odenen_toplam
+        toplam_oran_gosterim = (toplam_gosterim / hedef * 100) if hedef > 0 else 0
+
         bar_lbl = tk.Label(
             bar_frame,
-            text=f"₺{harcama:,.2f} / ₺{hedef:,.2f}  ({oran:.1f}%)",
+            text=f"₺{toplam_gosterim:,.2f} / ₺{hedef:,.2f}  ({toplam_oran_gosterim:.1f}%)",
             bg=ENTRY_BG, fg=TEXT, font=FONT_H3, anchor="center"
         )
         bar_lbl.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Alt bilgi satırı
-        if fark >= 0:
-            bilgi_text = f"Bütçenizden ₺{fark:,.2f} kaldı."
-            bilgi_renk = bar_renk
-        else:
-            bilgi_text = f"⚠️ Bütçenizi ₺{abs(fark):,.2f} aştınız!"
-            bilgi_renk = ERROR
+        # Alt açıklama
+        bilgi_satir = tk.Frame(container, bg=BG)
+        bilgi_satir.pack(fill="x", pady=(2, 0))
 
-        tk.Label(container, text=bilgi_text, bg=BG, fg=bilgi_renk,
-                 font=FONT_SMALL).pack(anchor="w", pady=(2, 0))
+        if odenen_toplam > 0:
+            tk.Label(bilgi_satir,
+                     text=f"✅ ₺{odenen_toplam:,.2f} ödendi  |  ⏳ ₺{harcama:,.2f} bekliyor",
+                     bg=BG, fg=SUCCESS, font=FONT_SMALL).pack(side="left")
+        if fark >= 0:
+            tk.Label(bilgi_satir, text=f"  —  Bütçeden ₺{fark:,.2f} kaldı.",
+                     bg=BG, fg=bar_renk, font=FONT_SMALL).pack(side="left")
+        else:
+            tk.Label(bilgi_satir, text=f"  —  ⚠️ Bütçeyi ₺{abs(fark):,.2f} aştınız!",
+                     bg=BG, fg=ERROR, font=FONT_SMALL).pack(side="left")
 
     # ── İptal Önerisi Kartı ───────────────────────────────────
     def _iptal_onerisi_goster(self, parent):
-        """Bütçe aşıldıysa kullanıcıya akıllı iptal önerisi gösterir."""
         bas, oneri = self.analiz_motoru.iptal_onerisi_getir(self.current_user_id)
         if not bas or not oneri.get('oneri_var'):
             return
@@ -752,7 +865,7 @@ class App(tk.Tk):
                       color=ACCENT, width=18, pady=10).pack(pady=(8, 16))
 
     # ════════════════════════════════════════════════════════════
-    # TAB: ABONELİKLERİM (Düzenleme özelliğiyle)
+    # TAB: ABONELİKLERİM – [YENİ] Tik Butonu + Görsel Geri Bildirim
     # ════════════════════════════════════════════════════════════
     def _tab_liste(self):
         self._clear_main()
@@ -763,7 +876,7 @@ class App(tk.Tk):
 
         tk.Label(outer, text="Aboneliklerim", bg=BG, fg=TEXT,
                  font=FONT_H2).pack(anchor="w")
-        tk.Label(outer, text="Kayıtlı tüm abonelikler – düzenlemek için satıra tıklayın",
+        tk.Label(outer, text="Kayıtlı tüm abonelikler – ✓ tıklayarak ödendi olarak işaretleyin",
                  bg=BG, fg=MUTED, font=FONT_SMALL).pack(anchor="w", pady=(2, 14))
 
         bas, liste = self.abonelik_motoru.listele_hepsi(self.current_user_id)
@@ -779,8 +892,8 @@ class App(tk.Tk):
         # Başlık satırı
         header = tk.Frame(outer, bg=CARD)
         header.pack(fill="x", pady=(0, 4))
-        for col, w in [("Servis", 16), ("Tutar", 10),
-                        ("Tarih", 12), ("Kategori", 12), ("", 10)]:
+        for col, w in [("Servis", 15), ("Tutar", 9),
+                        ("Tarih", 11), ("Kategori", 11), ("Durum", 6), ("", 10)]:
             tk.Label(header, text=col, bg=CARD, fg=MUTED,
                      font=FONT_LABEL, width=w, anchor="w").pack(side="left", padx=6, pady=6)
 
@@ -792,53 +905,92 @@ class App(tk.Tk):
             self._liste_satiri(inner, item)
 
     def _liste_satiri(self, parent, item):
-        renk = KAT_RENK.get(item['kategori'], MUTED)
-        row = tk.Frame(parent, bg=CARD2, highlightthickness=1,
+        """
+        [YENİ] Ödendi ise satır gri + soluk; Tik butonu yeşil yanar.
+        Tik butonuna tıklamak durumu toggle eder ve dashboard'u senkronize eder.
+        """
+        odendi = bool(item.get('odendi_mi', False))
+        renk   = KAT_RENK.get(item['kategori'], MUTED)
+
+        # Ödendi ise arka planı biraz farklı (tamamlandı hissi)
+        satir_bg = "#12161F" if odendi else CARD2
+        metin_fg = MUTED    if odendi else TEXT
+        tutar_fg = MUTED    if odendi else SUCCESS
+
+        row = tk.Frame(parent, bg=satir_bg, highlightthickness=1,
                        highlightbackground=BORDER, cursor="hand2")
         row.pack(fill="x", pady=2)
 
-        tk.Frame(row, bg=renk, width=4).pack(side="left", fill="y")
+        # Kategori renk şeridi
+        serit_renk = "#2A3040" if odendi else renk
+        tk.Frame(row, bg=serit_renk, width=4).pack(side="left", fill="y")
 
-        tk.Label(row, text=item['servis_adi'], bg=CARD2, fg=TEXT,
-                 font=FONT_H3, width=15, anchor="w").pack(side="left", padx=8, pady=8)
-        tk.Label(row, text=f"₺{item['tutar']:,.2f}", bg=CARD2, fg=SUCCESS,
+        # Servis adı – ödendiyse üstü çizili etki için metin rengini soltur
+        tk.Label(row, text=item['servis_adi'], bg=satir_bg, fg=metin_fg,
+                 font=FONT_H3, width=14, anchor="w").pack(side="left", padx=8, pady=8)
+        tk.Label(row, text=f"₺{item['tutar']:,.2f}", bg=satir_bg, fg=tutar_fg,
                  font=FONT_ENTRY, width=9, anchor="w").pack(side="left", padx=4)
-        tk.Label(row, text=item['odeme_tarihi'], bg=CARD2, fg=MUTED,
+        tk.Label(row, text=item['odeme_tarihi'], bg=satir_bg, fg=MUTED,
                  font=FONT_SMALL, width=11, anchor="w").pack(side="left", padx=4)
-        tk.Label(row, text=item['kategori'], bg=CARD2, fg=renk,
-                 font=FONT_SMALL, width=11, anchor="w").pack(side="left", padx=4)
+        tk.Label(row, text=item['kategori'], bg=satir_bg, fg=serit_renk,
+                 font=FONT_SMALL, width=10, anchor="w").pack(side="left", padx=4)
 
-        # ── Düzenle butonu ──
-        duz_btn = tk.Button(row, text="✏️", bg=CARD2, fg=ACCENT,
+        # ── [YENİ] Tik (Checkmark) butonu ──────────────────────
+        tik_renk  = SUCCESS if odendi else MUTED
+        tik_metin = "✔" if odendi else "○"
+        tik_bg    = "#0D2A1A" if odendi else satir_bg
+
+        tik_btn = tk.Button(
+            row, text=tik_metin,
+            bg=tik_bg, fg=tik_renk,
+            activebackground="#0D2A1A", activeforeground=SUCCESS,
+            relief="flat", cursor="hand2",
+            font=("Helvetica", 14, "bold"), width=3,
+            command=lambda i=item, o=odendi: self._tik_toggle(i, o)
+        )
+        tik_btn.pack(side="left", padx=6, pady=4)
+
+        # ── Düzenle / Sil butonları ──
+        duz_btn = tk.Button(row, text="✏️", bg=satir_bg, fg=ACCENT,
                              activebackground=ACCENT, activeforeground="#FFF",
                              relief="flat", cursor="hand2", font=FONT_H3,
                              command=lambda i=item: self._duzenle_modal(i))
         duz_btn.pack(side="right", padx=4)
 
-        sil_btn = tk.Button(row, text="🗑", bg=CARD2, fg=ERROR,
+        sil_btn = tk.Button(row, text="🗑", bg=satir_bg, fg=ERROR,
                              activebackground=ERROR, activeforeground="#FFF",
                              relief="flat", cursor="hand2", font=FONT_H3,
                              command=lambda aid=item['id']: self._sil_onayla(aid))
         sil_btn.pack(side="right", padx=6)
 
-        # Satıra tıklayarak da düzenleme açılır
+        # Satır tıklama → düzenle (tik dışında)
         row.bind("<Button-1>", lambda e, i=item: self._duzenle_modal(i))
+
+    def _tik_toggle(self, item: dict, mevcut_odendi: bool):
+        """
+        [YENİ] Ödeme durumunu toggle eder, listeyi ve dashboard'u senkronize eder.
+        """
+        yeni_durum = not mevcut_odendi
+        bas, mesaj = self.abonelik_motoru.odeme_durumu_guncelle(item['id'], yeni_durum)
+        if bas:
+            # Listeyi yenile
+            self._tab_liste()
+            # Genel Bakış zaten _tab_liste() dışında açık değilse güncelleme gerekmez;
+            # kullanıcı Genel Bakış'a geçtiğinde taze veriyle yüklenir.
+            # Ancak istenirse burada da _tab_genel() çağrılabilir.
+        else:
+            messagebox.showerror("Hata", f"Ödeme durumu güncellenemedi:\n{mesaj}")
 
     # ════════════════════════════════════════════════════════════
     # MODAL: ABONELİK DÜZENLE
     # ════════════════════════════════════════════════════════════
     def _duzenle_modal(self, item: dict):
-        """
-        Seçili abonelik için düzenleme modalı açar.
-        Tutar ve ödeme tarihi güncellenebilir.
-        """
         modal = tk.Toplevel(self)
         modal.title(f"Düzenle – {item['servis_adi']}")
         modal.configure(bg=BG)
         modal.resizable(False, False)
-        modal.grab_set()  # Modal davranışı
+        modal.grab_set()
 
-        # Pencereyi ortala
         modal.update_idletasks()
         pw, ph = 440, 440
         sw, sh = modal.winfo_screenwidth(), modal.winfo_screenheight()
@@ -847,7 +999,6 @@ class App(tk.Tk):
         outer = tk.Frame(modal, bg=BG)
         outer.pack(fill="both", expand=True, padx=24, pady=20)
 
-        # Başlık
         tk.Label(outer, text=f"✏️  {item['servis_adi']}", bg=BG, fg=TEXT,
                  font=FONT_H2).pack(anchor="w")
         tk.Label(outer, text="Abonelik bilgilerini güncelleyin",
@@ -856,21 +1007,18 @@ class App(tk.Tk):
         card = tk.Frame(outer, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
         card.pack(fill="x", ipady=8)
 
-        # Servis adı (salt okunur – sadece görünüm için)
         tk.Label(card, text="SERVİS ADI", bg=CARD, fg=MUTED,
                  font=FONT_LABEL, anchor="w").pack(fill="x", padx=20, pady=(14, 0))
         servis_ent = styled_entry(card, "")
         servis_ent.set_value(item['servis_adi'])
         servis_ent.pack(padx=20, pady=(4, 10), ipady=6, fill="x")
 
-        # Tutar
         tk.Label(card, text="YENİ TUTAR (₺)", bg=CARD, fg=MUTED,
                  font=FONT_LABEL, anchor="w").pack(fill="x", padx=20)
         tutar_ent = styled_entry(card, "0.00")
         tutar_ent.set_value(str(item['tutar']))
         tutar_ent.pack(padx=20, pady=(4, 10), ipady=6, fill="x")
 
-        # Tarih
         tk.Label(card, text="YENİ ÖDEME TARİHİ", bg=CARD, fg=MUTED,
                  font=FONT_LABEL, anchor="w").pack(fill="x", padx=20)
         tarih_pick = DateEntry(card,
@@ -883,7 +1031,6 @@ class App(tk.Tk):
             pass
         tarih_pick.pack(padx=20, pady=(4, 10), ipady=6, fill="x")
 
-        # Kategori
         tk.Label(card, text="KATEGORİ", bg=CARD, fg=MUTED,
                  font=FONT_LABEL, anchor="w").pack(fill="x", padx=20)
         kat_cb = ttk.Combobox(card, values=KATEGORILER,
@@ -892,7 +1039,6 @@ class App(tk.Tk):
         kat_cb.set(item['kategori'])
         kat_cb.pack(padx=20, pady=(4, 6), ipady=4, fill="x")
 
-        # Mesaj etiketi
         msg_lbl = tk.Label(card, text="", bg=CARD, fg=ERROR, font=FONT_SMALL)
         msg_lbl.pack()
 
@@ -938,7 +1084,6 @@ class App(tk.Tk):
     # MODAL: BÜTÇE GÜNCELLE
     # ════════════════════════════════════════════════════════════
     def _butce_guncelle_modal(self):
-        """Kullanıcının aylık bütçe hedefini güncellemesini sağlar."""
         modal = tk.Toplevel(self)
         modal.title("Bütçe Hedefini Güncelle")
         modal.configure(bg=BG)
@@ -964,7 +1109,6 @@ class App(tk.Tk):
         tk.Label(card, text="YENİ BÜTÇE LİMİTİ (₺)", bg=CARD, fg=MUTED,
                  font=FONT_LABEL, anchor="w").pack(fill="x", padx=20, pady=(14, 0))
 
-        # Mevcut bütçeyi göster
         bas, mevcut = self.kullanici_motoru.butce_getir(self.current_user_id)
         butce_ent = styled_entry(card, "2000.00")
         if bas:
@@ -1002,12 +1146,6 @@ class App(tk.Tk):
     # TAB: GRAFİKLER (Matplotlib)
     # ════════════════════════════════════════════════════════════
     def _tab_grafikler(self):
-        """
-        İki grafik gösterir:
-          1. Kategori Dağılımı – Pasta Grafiği (Pie Chart)
-          2. Aylık Harcama Trendi – Çizgi Grafiği (Line Chart)
-             (Mevcut aboneliklerin son 6 ay simülasyonu)
-        """
         self._clear_main()
         self._set_active_nav(4)
 
@@ -1019,7 +1157,6 @@ class App(tk.Tk):
         tk.Label(outer, text="Harcamalarını görselleştir",
                  bg=BG, fg=MUTED, font=FONT_SMALL).pack(anchor="w", pady=(2, 14))
 
-        # Verileri çek
         bas1, dagilim = self.abonelik_motoru.kategori_bazli_dagilim(self.current_user_id)
         bas2, liste   = self.abonelik_motoru.listele_hepsi(self.current_user_id)
 
@@ -1028,11 +1165,9 @@ class App(tk.Tk):
                      bg=BG, fg=MUTED, font=FONT_ENTRY).pack(pady=60)
             return
 
-        # ── Figure oluştur ──────────────────────────────────────
         fig = Figure(figsize=(9, 5), facecolor=PLT_BG)
         fig.subplots_adjust(wspace=0.4, left=0.08, right=0.95)
 
-        # ── 1. Pasta Grafiği ────────────────────────────────────
         ax1 = fig.add_subplot(121)
         ax1.set_facecolor(PLT_CARD)
 
@@ -1041,36 +1176,26 @@ class App(tk.Tk):
         renkler   = [KAT_RENK.get(k, '#888888') for k in etiketler]
 
         wedges, texts, autotexts = ax1.pie(
-            degerler,
-            labels=None,
-            colors=renkler,
-            autopct='%1.1f%%',
-            startangle=140,
-            pctdistance=0.78,
+            degerler, labels=None, colors=renkler,
+            autopct='%1.1f%%', startangle=140, pctdistance=0.78,
             wedgeprops={'linewidth': 2, 'edgecolor': PLT_BG}
         )
         for at in autotexts:
             at.set_color(PLT_TEXT)
             at.set_fontsize(8)
 
-        # Legend
         legend_patches = [
             mpatches.Patch(color=renkler[i], label=f"{etiketler[i]}  ₺{degerler[i]:,.0f}")
             for i in range(len(etiketler))
         ]
         ax1.legend(handles=legend_patches, loc="lower center",
                    bbox_to_anchor=(0.5, -0.18), ncol=2,
-                   fontsize=7, frameon=False,
-                   labelcolor=PLT_TEXT, facecolor=PLT_BG)
+                   fontsize=7, frameon=False, labelcolor=PLT_TEXT, facecolor=PLT_BG)
         ax1.set_title("Kategori Dağılımı", color=PLT_TEXT, fontsize=10, pad=12)
 
-        # ── 2. Çizgi Grafiği (Aylık Trend Simülasyonu) ──────────
         ax2 = fig.add_subplot(122)
         ax2.set_facecolor(PLT_CARD)
 
-        # Mevcut toplam abonelik tutarından 6 aylık trend simüle et
-        # Gerçek proje için aylık snapshot tablosu eklenebilir;
-        # burada mevcut toplam üzerine küçük varyasyon uyguluyoruz.
         bas3, toplam = self.abonelik_motoru.toplam_maliyet_hesapla(self.current_user_id)
         toplam = toplam if bas3 else 0.0
 
@@ -1083,20 +1208,15 @@ class App(tk.Tk):
             ay_dt = datetime(simdi.year if simdi.month > i else simdi.year - 1,
                              ((simdi.month - i - 1) % 12) + 1, 1)
             aylar.append(ay_dt.strftime('%b %Y'))
-            # Küçük rastgele sapma (±%15) ile trend
             sapma = 1 + random.uniform(-0.15, 0.15)
             degerler_cizgi.append(round(toplam * sapma, 2))
-        # Son ay her zaman gerçek toplam
         degerler_cizgi[-1] = toplam
 
         ax2.plot(aylar, degerler_cizgi, color=ACCENT, linewidth=2.5,
                  marker='o', markersize=6, markerfacecolor=ACCENT2)
-        ax2.fill_between(range(len(aylar)), degerler_cizgi,
-                         alpha=0.15, color=ACCENT)
-
+        ax2.fill_between(range(len(aylar)), degerler_cizgi, alpha=0.15, color=ACCENT)
         ax2.set_xticks(range(len(aylar)))
-        ax2.set_xticklabels(aylar, rotation=30, ha='right',
-                            color=PLT_MUTED, fontsize=7)
+        ax2.set_xticklabels(aylar, rotation=30, ha='right', color=PLT_MUTED, fontsize=7)
         ax2.tick_params(axis='y', colors=PLT_MUTED, labelsize=7)
         ax2.spines['bottom'].set_color(BORDER)
         ax2.spines['left'].set_color(BORDER)
@@ -1108,7 +1228,6 @@ class App(tk.Tk):
         ax2.set_ylabel("₺ Tutar", color=PLT_MUTED, fontsize=8)
         ax2.grid(axis='y', color=BORDER, linestyle='--', alpha=0.4)
 
-        # ── Canvas'a yerleştir ──────────────────────────────────
         canvas = FigureCanvasTkAgg(fig, master=outer)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
@@ -1117,9 +1236,6 @@ class App(tk.Tk):
     # TAB: PROJEKSİYON & AKILLI ANALİZ
     # ════════════════════════════════════════════════════════════
     def _tab_projeksiyon(self):
-        """
-        Yıllık maliyet projeksiyonu ve akıllı iptal önerisi gösterir.
-        """
         self._clear_main()
         self._set_active_nav(5)
 
@@ -1133,7 +1249,6 @@ class App(tk.Tk):
         tk.Label(inner, text="Gelecek yılki tahmini abonelik yükü ve öneriler",
                  bg=BG, fg=MUTED, font=FONT_SMALL).pack(anchor="w", pady=(2, 16))
 
-        # Veri çek
         bas, proj = self.analiz_motoru.yillik_projeksiyon_hesapla(self.current_user_id)
 
         if not bas:
@@ -1146,7 +1261,6 @@ class App(tk.Tk):
                      bg=BG, fg=MUTED, font=FONT_ENTRY).pack(pady=40)
             return
 
-        # ── Özet Kartları ──────────────────────────────────────
         kart_row = tk.Frame(inner, bg=BG)
         kart_row.pack(fill="x", pady=(0, 20))
 
@@ -1161,7 +1275,6 @@ class App(tk.Tk):
 
         section_line(inner)
 
-        # ── Projeksiyon Çubuğu ─────────────────────────────────
         tk.Label(inner, text="📈 Yıllık Maliyet Karşılaştırması",
                  bg=BG, fg=TEXT, font=FONT_H3).pack(anchor="w", pady=(0, 10))
 
@@ -1189,7 +1302,6 @@ class App(tk.Tk):
 
         section_line(inner)
 
-        # ── İptal Önerisi ──────────────────────────────────────
         tk.Label(inner, text="💡 Akıllı İptal Önerisi",
                  bg=BG, fg=TEXT, font=FONT_H3).pack(anchor="w", pady=(0, 8))
 
@@ -1212,7 +1324,6 @@ class App(tk.Tk):
                          bg="#0D2A1A", fg=SUCCESS,
                          font=FONT_H3).pack(anchor="w", padx=14, pady=12)
 
-        # ── En Pahalı Abonelik ─────────────────────────────────
         if proj.get('en_pahali'):
             en = proj['en_pahali']
             section_line(inner)

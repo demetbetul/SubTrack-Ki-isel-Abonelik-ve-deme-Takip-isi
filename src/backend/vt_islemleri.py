@@ -51,9 +51,16 @@ class VeritabaniTabani:
                     odeme_tarihi TEXT NOT NULL,
                     kategori TEXT NOT NULL,
                     kullanici_id INTEGER NOT NULL,
+                    odendi_mi INTEGER DEFAULT 0,
                     FOREIGN KEY (kullanici_id) REFERENCES kullanicilar (id)
                 )
             ''')
+
+            # Mevcut abonelikler tablosunda odendi_mi sütunu yoksa ekle (migration)
+            cursor.execute("PRAGMA table_info(abonelikler)")
+            abone_sutunlar = [row[1] for row in cursor.fetchall()]
+            if 'odendi_mi' not in abone_sutunlar:
+                cursor.execute("ALTER TABLE abonelikler ADD COLUMN odendi_mi INTEGER DEFAULT 0")
             
             conn.commit()
             conn.close()
@@ -286,7 +293,8 @@ class AbonelikIslemleri(VeritabaniTabani):
             conn = self.baglanti_ac()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, servis_adi, tutar, odeme_tarihi, kategori 
+                SELECT id, servis_adi, tutar, odeme_tarihi, kategori,
+                       COALESCE(odendi_mi, 0)
                 FROM abonelikler 
                 WHERE kullanici_id = ?
                 ORDER BY odeme_tarihi DESC
@@ -299,7 +307,8 @@ class AbonelikIslemleri(VeritabaniTabani):
                     'servis_adi': satir[1],
                     'tutar': satir[2],
                     'odeme_tarihi': satir[3],
-                    'kategori': satir[4]
+                    'kategori': satir[4],
+                    'odendi_mi': bool(satir[5])
                 })
             return (True, abonelikler)
         
@@ -352,7 +361,8 @@ class AbonelikIslemleri(VeritabaniTabani):
             conn = self.baglanti_ac()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, servis_adi, tutar, odeme_tarihi, kategori
+                SELECT id, servis_adi, tutar, odeme_tarihi, kategori,
+                       COALESCE(odendi_mi, 0)
                 FROM abonelikler
                 WHERE kullanici_id = ?
                 ORDER BY odeme_tarihi ASC
@@ -366,7 +376,8 @@ class AbonelikIslemleri(VeritabaniTabani):
                     'servis_adi': satir[1],
                     'tutar': satir[2],
                     'odeme_tarihi': satir[3],
-                    'kategori': satir[4]
+                    'kategori': satir[4],
+                    'odendi_mi': bool(satir[5])
                 })
             return (True, odemeler)
         except Exception as e:
@@ -375,12 +386,63 @@ class AbonelikIslemleri(VeritabaniTabani):
             if conn is not None:
                 conn.close()
 
-    # ── YENİ: 1 Gün Kalan Abonelikler (Bildirim için) ──────────────
+    # ── YENİ: Ödeme durumunu güncelle ──────────────────────────────
+    def odeme_durumu_guncelle(self, abonelik_id: int, odendi: bool) -> tuple:
+        """
+        Belirli bir aboneliğin ödendi_mi alanını günceller.
+
+        Parametreler:
+            abonelik_id (int): Güncellenecek aboneliğin ID'si
+            odendi (bool): True = ödendi, False = ödenmedi
+
+        Dönüş: (başarı: bool, mesaj: str)
+        """
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            cursor.execute(
+                'UPDATE abonelikler SET odendi_mi = ? WHERE id = ?',
+                (1 if odendi else 0, abonelik_id)
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return (False, "Abonelik bulunamadı.")
+            return (True, "Ödeme durumu güncellendi.")
+        except Exception as e:
+            return (False, str(e))
+        finally:
+            if conn is not None:
+                conn.close()
+
+    # ── YENİ: Ayın 1'inde otomatik sıfırlama ──────────────────────
+    def aylik_odeme_sifirla(self, kullanici_id: int) -> tuple:
+        """
+        Kullanıcının tüm aboneliklerinin ödendi_mi değerini 0'a sıfırlar.
+        Her ayın 1'inde çağrılmak üzere tasarlanmıştır.
+
+        Dönüş: (başarı: bool, sifirlanan_adet: int veya hata_mesaji: str)
+        """
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            cursor.execute(
+                'UPDATE abonelikler SET odendi_mi = 0 WHERE kullanici_id = ?',
+                (kullanici_id,)
+            )
+            conn.commit()
+            return (True, cursor.rowcount)
+        except Exception as e:
+            return (False, str(e))
+        finally:
+            if conn is not None:
+                conn.close()
     def yarin_odemeleri_bul(self, kullanici_id: int) -> tuple:
         """
-        Yarın (1 gün sonra) ödeme tarihi olan abonelikleri bulur.
+        Yarın ödeme tarihi olan ve henüz ödenmemiş abonelikleri bulur.
         win10toast bildirimleri için kullanılır.
-        
+
         Dönüş: (başarı: bool, liste: List[Dict])
         """
         conn = None
@@ -389,13 +451,15 @@ class AbonelikIslemleri(VeritabaniTabani):
             conn = self.baglanti_ac()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, servis_adi, tutar, odeme_tarihi, kategori
+                SELECT id, servis_adi, tutar, odeme_tarihi, kategori,
+                       COALESCE(odendi_mi, 0)
                 FROM abonelikler
                 WHERE kullanici_id = ?
                 AND DATE(odeme_tarihi) = DATE(?)
+                AND COALESCE(odendi_mi, 0) = 0
                 ORDER BY odeme_tarihi ASC
             ''', (kullanici_id, yarin))
-            
+
             odemeler = []
             for satir in cursor.fetchall():
                 odemeler.append({
@@ -403,7 +467,8 @@ class AbonelikIslemleri(VeritabaniTabani):
                     'servis_adi': satir[1],
                     'tutar': satir[2],
                     'odeme_tarihi': satir[3],
-                    'kategori': satir[4]
+                    'kategori': satir[4],
+                    'odendi_mi': bool(satir[5])
                 })
             return (True, odemeler)
         except Exception as e:

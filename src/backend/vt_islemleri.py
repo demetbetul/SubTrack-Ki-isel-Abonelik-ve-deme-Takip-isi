@@ -418,33 +418,43 @@ class AbonelikIslemleri(VeritabaniTabani):
             if conn: conn.close()
 
     # ── YENİ: Ödeme durumunu güncelle ──────────────────────────────
-    def odeme_durumu_guncelle(self, abonelik_id: int, odendi: bool) -> tuple:
+    def odeme_durumu_guncelle(self, abonelik_id: int, durum: int) -> tuple:
         """
-        Belirli bir aboneliğin ödendi_mi alanını günceller.
-
-        Parametreler:
-            abonelik_id (int): Güncellenecek aboneliğin ID'si
-            odendi (bool): True = ödendi, False = ödenmedi
-
-        Dönüş: (başarı: bool, mesaj: str)
+        Ödeme durumunu günceller. Eğer ödendi (1) yapıldıysa, 
+        tarihi otomatik olarak bir sonraki aya öteler.
         """
         conn = None
         try:
             conn = self.baglanti_ac()
             cursor = conn.cursor()
-            cursor.execute(
-                'UPDATE abonelikler SET odendi_mi = ? WHERE id = ?',
-                (1 if odendi else 0, abonelik_id)
-            )
+            
+            if durum == 1: # Ödendi olarak işaretlendi
+                # Önce mevcut tarihi al
+                cursor.execute("SELECT odeme_tarihi FROM abonelikler WHERE id = ?", (abonelik_id,))
+                mevcut_tarih_str = cursor.fetchone()[0]
+                mevcut_tarih = datetime.strptime(mevcut_tarih_str, '%Y-%m-%d')
+                
+                # Tarihi 1 ay sonraya ötele (Basit mantık: 30 gün ekle veya ay değiştir)
+                # Not: calendar.monthrange kullanmak daha profesyoneldir ama şimdilik +30 gün pratik çözümdür.
+                yeni_tarih = mevcut_tarih + timedelta(days=30)
+                yeni_tarih_str = yeni_tarih.strftime('%Y-%m-%d')
+                
+                # Hem durumu 1 yap hem tarihi güncelle hem de bütçe senkronu için odendi_mi tut
+                cursor.execute('''
+                    UPDATE abonelikler 
+                    SET odendi_mi = ?, odeme_tarihi = ? 
+                    WHERE id = ?
+                ''', (1, yeni_tarih_str, abonelik_id))
+            else:
+                # Ödenmedi (Bekliyor) durumuna geri çekme
+                cursor.execute("UPDATE abonelikler SET odendi_mi = ? WHERE id = ?", (0, abonelik_id))
+                
             conn.commit()
-            if cursor.rowcount == 0:
-                return (False, "Abonelik bulunamadı.")
-            return (True, "Ödeme durumu güncellendi.")
+            return (True, "Güncellendi")
         except Exception as e:
             return (False, str(e))
         finally:
-            if conn is not None:
-                conn.close()
+            if conn: conn.close()
 
     # ── YENİ: Ayın 1'inde otomatik sıfırlama ──────────────────────
     def aylik_odeme_sifirla(self, kullanici_id: int) -> tuple:

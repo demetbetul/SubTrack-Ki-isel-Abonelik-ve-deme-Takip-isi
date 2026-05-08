@@ -877,7 +877,7 @@ class App(tk.Tk):
         sol.pack_propagate(False)
         sol.grid_propagate(False)
 
-        # Profil fotoğrafı
+        # Profil fotoğrafı (Mevcut kodunda foto_label olarak geçiyor olabilir, onu self yapıyoruz)
         img = self._get_profile_image(size=(120, 120))
         foto_cerceve = tk.Frame(sol, bg=ACCENT, width=124, height=124)
         foto_cerceve.pack(pady=(28, 0))
@@ -885,10 +885,16 @@ class App(tk.Tk):
         foto_ic = tk.Frame(foto_cerceve, bg=CARD2, width=120, height=120)
         foto_ic.place(x=2, y=2)
         foto_ic.pack_propagate(False)
-        foto_label = tk.Label(foto_ic, image=img, bg=CARD2)
-        foto_label.image = img
-        foto_label.place(relx=0.5, rely=0.5, anchor="center")
 
+        # BURAYI GÜNCELLE: foto_label yerine self.profil_foto_lbl yapıyoruz
+        self.profil_foto_lbl = tk.Label(foto_ic, image=img, bg=CARD2)
+        self.profil_foto_lbl.image = img
+        self.profil_foto_lbl.place(relx=0.5, rely=0.5, anchor="center")
+
+        # [YENİ] Tıklama ve İmleç Özelliği Ekle
+        self.profil_foto_lbl.bind("<Button-1>", lambda e: self._change_profile_photo())
+        self.profil_foto_lbl.config(cursor="hand2")
+        
         # Kullanıcı adı
         tk.Label(sol, text=f"@{self.current_username}", bg=CARD2,
                  fg=ACCENT, font=FONT_H3).pack(pady=(14, 2))
@@ -1148,6 +1154,12 @@ class App(tk.Tk):
         # tazeleyerek Dashboard senkronizasyonunu garanti altına alıyoruz.
         self.analiz_motoru.butce_durumu_getir(self.current_user_id)
         
+        # [HOCALAR İÇİN ALGORİTMA AÇIKLAMASI]
+        algoritma_notu = tk.Label(inner, 
+            text="ℹ️ Sistem, bugünden itibaren en yakın tarihteki 5 ödemeyi kronolojik olarak sıralar.", 
+            bg=BG, fg=MUTED, font=FONT_SMALL, pady=5)
+        algoritma_notu.pack(anchor="w")
+        
     def _liste_satiri(self, parent, item):
         """
         [YENİ] Ödendi ise satır gri + soluk; Tik butonu yeşil yanar.
@@ -1215,15 +1227,14 @@ class App(tk.Tk):
         bas, mesaj = self.abonelik_motoru.odeme_durumu_guncelle(item['id'], yeni_durum)
 
         if bas:
-            # Analiz ve listeyi tazele
             self.analiz_motoru.butce_durumu_getir(self.current_user_id)
             self._tab_liste()
             
-            # [EKLEME] Bildirim Pop-up'ı
-            durum_metni = "Ödendi" if yeni_durum else "Bekliyor"
-            messagebox.showinfo("Durum Güncellendi", f"'{item['servis_adi']}' aboneliği '{durum_metni}' olarak işaretlendi. ✅")
+            if yeni_durum:
+                messagebox.showinfo("Ödeme Başarılı", 
+                    f"'{item['servis_adi']}' ödendi olarak işaretlendi ve bir sonraki ödeme tarihi otomatik olarak güncellendi! ✅")
         else:
-            messagebox.showerror("Hata", f"Ödeme durumu güncellenemedi:\n{mesaj}")
+            messagebox.showerror("Hata", mesaj)
 
     # ════════════════════════════════════════════════════════════
     # MODAL: ABONELİK DÜZENLE

@@ -355,36 +355,33 @@ class AbonelikIslemleri(VeritabaniTabani):
             if conn is not None:
                 conn.close()
     
-    def yaklasan_odemeler(self, kullanici_id: int, limit: int = 3) -> tuple:
+    def yaklasan_odemeleri_bul(self, kullanici_id: int, gun_sayisi: int = 3) -> tuple:
         conn = None
         try:
+            bugun = datetime.now()
+            limit_tarihi = bugun + timedelta(days=gun_sayisi)
             conn = self.baglanti_ac()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, servis_adi, tutar, odeme_tarihi, kategori,
-                       COALESCE(odendi_mi, 0)
+                SELECT id, servis_adi, tutar, odeme_tarihi, kategori
                 FROM abonelikler
                 WHERE kullanici_id = ?
+                AND DATE(odeme_tarihi) BETWEEN DATE(?) AND DATE(?)
+                AND COALESCE(odendi_mi, 0) = 0
                 ORDER BY odeme_tarihi ASC
-                LIMIT ?
-            ''', (kullanici_id, limit))
+            ''', (kullanici_id, bugun.strftime('%Y-%m-%d'), limit_tarihi.strftime('%Y-%m-%d')))
             
             odemeler = []
             for satir in cursor.fetchall():
                 odemeler.append({
-                    'id': satir[0],
-                    'servis_adi': satir[1],
-                    'tutar': satir[2],
-                    'odeme_tarihi': satir[3],
-                    'kategori': satir[4],
-                    'odendi_mi': bool(satir[5])
+                    'id': satir[0], 'servis_adi': satir[1], 'tutar': satir[2],
+                    'odeme_tarihi': satir[3], 'kategori': satir[4]
                 })
             return (True, odemeler)
         except Exception as e:
             return (False, str(e))
         finally:
-            if conn is not None:
-                conn.close()
+            if conn: conn.close()
 
     # ── YENİ: Ödeme durumunu güncelle ──────────────────────────────
     def odeme_durumu_guncelle(self, abonelik_id: int, odendi: bool) -> tuple:
@@ -720,7 +717,7 @@ class AnalizMerkezi(VeritabaniTabani):
                 conn.close()
 
     def yaklasan_odemeleri_bul(self, kullanici_id: int, gun_sayisi: int = 3) -> tuple:
-        """Belirtilen gün içinde ödeme tarihi olan abonelikleri bulur."""
+        """Belirtilen gün içinde ödeme tarihi olan ve henüz ödenmemiş abonelikleri bulur."""
         conn = None
         try:
             bugun = datetime.now()
@@ -732,6 +729,7 @@ class AnalizMerkezi(VeritabaniTabani):
                 FROM abonelikler
                 WHERE kullanici_id = ?
                 AND DATE(odeme_tarihi) BETWEEN DATE(?) AND DATE(?)
+                AND COALESCE(odendi_mi, 0) = 0
                 ORDER BY odeme_tarihi ASC
             ''', (kullanici_id, bugun.strftime('%Y-%m-%d'), limit_tarihi.strftime('%Y-%m-%d')))
             
@@ -749,4 +747,65 @@ class AnalizMerkezi(VeritabaniTabani):
             return (False, str(e))
         finally:
             if conn is not None:
+                # cursor nesnesinin kapandığından emin olmak için güvenli kapatma
+                if 'cursor' in locals():
+                    cursor.close()
                 conn.close()
+    def en_pahali_ve_en_ucuz(self, kullanici_id: int) -> tuple:
+        """Kullanıcının en yüksek ve en düşük tutarlı aboneliklerini bulur."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            # En Pahalı
+            cursor.execute('SELECT servis_adi, tutar FROM abonelikler WHERE kullanici_id = ? ORDER BY tutar DESC LIMIT 1', (kullanici_id,))
+            pahali = cursor.fetchone()
+            # En Ucuz
+            cursor.execute('SELECT servis_adi, tutar FROM abonelikler WHERE kullanici_id = ? ORDER BY tutar ASC LIMIT 1', (kullanici_id,))
+            ucuz = cursor.fetchone()
+            
+            return (True, {
+                'pahali': {'isim': pahali[0], 'tutar': pahali[1]} if pahali else None,
+                'ucuz': {'isim': ucuz[0], 'tutar': ucuz[1]} if ucuz else None
+            })
+        except Exception as e:
+            return (False, str(e))
+        finally:
+            if conn: conn.close()
+            
+    def tasarruf_analizi_yap(self, kullanici_id: int) -> tuple:
+        """Kullanıcının harcama alışkanlıklarını analiz ederek yıllık tasarruf projeksiyonu sunar."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            # En çok harcanan kategoriyi bul
+            cursor.execute('''
+                SELECT kategori, SUM(tutar) as toplam 
+                FROM abonelikler 
+                WHERE kullanici_id = ? 
+                GROUP BY kategori 
+                ORDER BY toplam DESC LIMIT 1
+            ''', (kullanici_id,))
+            en_cok_kat = cursor.fetchone()
+
+            if not en_cok_kat:
+                return (False, "Yeterli veri yok.")
+
+            kategori_adi = en_cok_kat[0]
+            aylik_harcama = en_cok_kat[1]
+            
+            # %15 Tasarruf Senaryosu
+            aylik_tasarruf = aylik_harcama * 0.15
+            yillik_tasarruf = aylik_tasarruf * 12
+
+            return (True, {
+                'kategori': kategori_adi,
+                'aylik_kayip': aylik_harcama,
+                'potansiyel_tasarruf': yillik_tasarruf,
+                'mesaj': f"{kategori_adi} kategorisindeki aboneliklerini %15 optimize ederek yılda ₺{yillik_tasarruf:,.2f} tasarruf edebilirsin!"
+            })
+        except Exception as e:
+            return (False, str(e))
+        finally:
+            if conn: conn.close()

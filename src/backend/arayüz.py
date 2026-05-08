@@ -443,37 +443,23 @@ class App(tk.Tk):
         t.start()
 
     def _bildirim_gonder(self):
-        """
-        Yarın ödeme tarihi olan abonelikleri bulur ve çift katmanlı bildirim gönderir:
-          1. Win10Toast (Windows sistem bildirimi) – kuruluysa
-          2. Uygulama içi şık TopLevel popup – her zaman gösterilir
-        """
-        if not self.current_user_id:
-            return
-
+        
+        """Hem Windows bildirimi hem de uygulama içi kritik uyarı penceresi açar."""
+        # 1. Yarın ödemesi olanlar
         bas, odemeler = self.abonelik_motoru.yarin_odemeleri_bul(self.current_user_id)
-        if not bas or not odemeler:
-            return
+        # 2. Ödenmemiş gecikmiş borçlar (Ekstra Özellik!)
+        bas2, gecikmis = self.abonelik_motoru.listele_hepsi(self.current_user_id)
+        gecikmis_liste = [o for o in gecikmis if not o['odendi_mi'] and 
+                          datetime.strptime(o['odeme_tarihi'], '%Y-%m-%d') < datetime.now()]
 
-        mesaj_listesi = "\n".join(
-            f"• {o['servis_adi']}  ₺{o['tutar']:,.2f}" for o in odemeler
-        )
+        uyari_metni = ""
+        if odemeler:
+            uyari_metni += "⏰ Yarın Ödenecekler:\n" + "\n".join([f"• {o['servis_adi']}" for o in odemeler])
+        if gecikmis_liste:
+            uyari_metni += "\n\n⚠️ Gecikmiş Ödemeler (Ödendi İşaretlenmemiş):\n" + "\n".join([f"• {o['servis_adi']}" for o in gecikmis_liste])
 
-        # ── Katman 1: Win10Toast (Windows sistem bildirimi) ────
-        if _TOAST_AVAILABLE:
-            try:
-                def _toast_gonder():
-                    toaster = ToastNotifier()
-                    baslik = f"SubTrack – {len(odemeler)} Ödeme Yarın!"
-                    mesaj = f"Yarın ödenecek abonelikler:\n{mesaj_listesi}"
-                    toaster.show_toast(baslik, mesaj, duration=8, threaded=False)
-                threading.Thread(target=_toast_gonder, daemon=True).start()
-            except Exception:
-                pass
-
-        # ── Katman 2: Uygulama içi şık TopLevel popup ──────────
-        self._bildirim_popup_goster(len(odemeler), mesaj_listesi)
-
+        if uyari_metni:
+            messagebox.showwarning("SubTrack Finansal Uyarı", uyari_metni)
     def _bildirim_popup_goster(self, adet, mesaj_listesi):
         """
         Otomatik kapanan, şık bir uygulama içi bildirim popup'ı.
@@ -553,7 +539,8 @@ class App(tk.Tk):
         # ── Backend çağrıları ──
         bas1, toplam = self.abonelik_motoru.toplam_maliyet_hesapla(self.current_user_id)
         bas2, liste  = self.abonelik_motoru.listele_hepsi(self.current_user_id)
-        bas3, yaklas = self.abonelik_motoru.yaklasan_odemeler(self.current_user_id, limit=3)
+        # Doğru fonksiyon ismini ve parametresini kullanıyoruz
+        bas3, yaklas = self.abonelik_motoru.yaklasan_odemeleri_bul(self.current_user_id, gun_sayisi=7)
         bas4, katlar = self.analiz_motoru.kategori_ozeti_getir(self.current_user_id)
         bas5, butce  = self.analiz_motoru.butce_durumu_getir(self.current_user_id)
 
@@ -794,7 +781,8 @@ class App(tk.Tk):
         self.yeni_tarih = DateEntry(card,
                                     background=ACCENT, foreground=TEXT,
                                     bordercolor=BORDER, date_pattern='y-mm-dd',
-                                    font=FONT_ENTRY, width=18)
+                                    font=FONT_ENTRY, width=18,
+                                    yearlabel=True, monthvariant='dropdown') # <-- Bu kısım yılı seçilebilir yapar!
         self.yeni_tarih.pack(padx=24, pady=(4, 12), ipady=6, fill="x")
 
         tk.Label(card, text="KATEGORİ", bg=CARD, fg=MUTED,
@@ -1030,70 +1018,6 @@ class App(tk.Tk):
         tk.Label(tarih_row, text=datetime.now().strftime("%d %B %Y"), bg=CARD2,
                  fg=TEXT, font=FONT_SMALL).pack(side="left")
 
-        # Ayırıcı
-        tk.Frame(sag, bg=BORDER, height=1).pack(fill="x", pady=18)
-
-        # ════════════════════════════════════════════════
-        # BÖLÜM 3 – Uygulama Tercihleri
-        # ════════════════════════════════════════════════
-        tk.Label(sag, text="🎛️  Uygulama Tercihleri",
-                 bg=BG, fg=ACCENT, font=FONT_H3).pack(anchor="w", pady=(0, 10))
-
-        tercih_kart = tk.Frame(sag, bg=CARD2, highlightthickness=1,
-                               highlightbackground=BORDER)
-        tercih_kart.pack(fill="x")
-
-        def _tercih_satiri(parent, ikon, etiket, widget_fn):
-            satir = tk.Frame(parent, bg=CARD2)
-            satir.pack(fill="x", padx=16, pady=8)
-            tk.Label(satir, text=f"{ikon}  {etiket}", bg=CARD2,
-                     fg=TEXT, font=FONT_SMALL, width=24, anchor="w").pack(side="left")
-            widget_fn(satir)
-            tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=16)
-
-        # Bildirimler toggle
-        self._bildirim_var = tk.StringVar(value="Açık")
-        def _bildirim_widget(p):
-            cb = ttk.Combobox(p, textvariable=self._bildirim_var,
-                              values=["Açık", "Kapalı"],
-                              state="readonly", width=10,
-                              font=FONT_SMALL)
-            cb.pack(side="right")
-        _tercih_satiri(tercih_kart, "🔔", "Bildirimler", _bildirim_widget)
-
-        # Para birimi seçimi
-        self._para_var = tk.StringVar(value="TL (₺)")
-        def _para_widget(p):
-            cb = ttk.Combobox(p, textvariable=self._para_var,
-                              values=["TL (₺)", "USD ($)", "EUR (€)", "GBP (£)"],
-                              state="readonly", width=10,
-                              font=FONT_SMALL)
-            cb.pack(side="right")
-        _tercih_satiri(tercih_kart, "💱", "Para Birimi", _para_widget)
-
-        # Tema seçimi (görsel, placeholder)
-        self._tema_var = tk.StringVar(value="Koyu Tema")
-        def _tema_widget(p):
-            cb = ttk.Combobox(p, textvariable=self._tema_var,
-                              values=["Koyu Tema", "Açık Tema (Yakında)"],
-                              state="readonly", width=16,
-                              font=FONT_SMALL)
-            cb.pack(side="right")
-        _tercih_satiri(tercih_kart, "🎨", "Tema", _tema_widget)
-
-        # Dil seçimi (görsel, placeholder)
-        self._dil_var = tk.StringVar(value="Türkçe")
-        def _dil_widget(p):
-            cb = ttk.Combobox(p, textvariable=self._dil_var,
-                              values=["Türkçe", "English (Yakında)"],
-                              state="readonly", width=16,
-                              font=FONT_SMALL)
-            cb.pack(side="right")
-        _tercih_satiri(tercih_kart, "🌐", "Dil / Language", _dil_widget)
-
-        # Son boşluk
-        tk.Frame(tercih_kart, bg=CARD2, height=6).pack()
-
         # Alt kaydetme butonu (placeholder)
         kaydet_row = tk.Frame(sag, bg=BG)
         kaydet_row.pack(fill="x", pady=18)
@@ -1195,7 +1119,11 @@ class App(tk.Tk):
 
         for item in liste:
             self._liste_satiri(inner, item)
-
+        
+        # [MANTIK DÜZELTMESİ] Liste her yüklendiğinde analiz motorunu 
+        # tazeleyerek Dashboard senkronizasyonunu garanti altına alıyoruz.
+        self.analiz_motoru.butce_durumu_getir(self.current_user_id)
+        
     def _liste_satiri(self, parent, item):
         """
         [YENİ] Ödendi ise satır gri + soluk; Tik butonu yeşil yanar.
@@ -1259,17 +1187,17 @@ class App(tk.Tk):
         row.bind("<Button-1>", lambda e, i=item: self._duzenle_modal(i))
 
     def _tik_toggle(self, item: dict, mevcut_odendi: bool):
-        """
-        [YENİ] Ödeme durumunu toggle eder, listeyi ve dashboard'u senkronize eder.
-        """
         yeni_durum = not mevcut_odendi
         bas, mesaj = self.abonelik_motoru.odeme_durumu_guncelle(item['id'], yeni_durum)
+
         if bas:
-            # Listeyi yenile
+            # Analiz ve listeyi tazele
+            self.analiz_motoru.butce_durumu_getir(self.current_user_id)
             self._tab_liste()
-            # Genel Bakış zaten _tab_liste() dışında açık değilse güncelleme gerekmez;
-            # kullanıcı Genel Bakış'a geçtiğinde taze veriyle yüklenir.
-            # Ancak istenirse burada da _tab_genel() çağrılabilir.
+            
+            # [EKLEME] Bildirim Pop-up'ı
+            durum_metni = "Ödendi" if yeni_durum else "Bekliyor"
+            messagebox.showinfo("Durum Güncellendi", f"'{item['servis_adi']}' aboneliği '{durum_metni}' olarak işaretlendi. ✅")
         else:
             messagebox.showerror("Hata", f"Ödeme durumu güncellenemedi:\n{mesaj}")
 
@@ -1359,9 +1287,16 @@ class App(tk.Tk):
             bas, mesaj = self.abonelik_motoru.guncelle(
                 item['id'], servis, tutar, tarih, kat
             )
+            
             if bas:
+                # [BİLDİRİM EKLEMESİ]
+                messagebox.showinfo("Başarılı", f"'{servis}' aboneliği başarıyla güncellendi! ✏️")
+                
                 modal.destroy()
                 self._tab_liste()
+                
+                # Eğer dashboard verilerini de tazelemek istersen şu satırı da ekleyebilirsin:
+                # self.analiz_motoru.butce_durumu_getir(self.current_user_id)
             else:
                 msg_lbl.config(text=mesaj, fg=ERROR)
 
@@ -1632,6 +1567,33 @@ class App(tk.Tk):
                      font=FONT_SMALL).pack(side="left", padx=8)
             tk.Label(en_kart, text=f"₺{en['tutar']:,.2f}/ay",
                      bg=CARD2, fg=ERROR, font=FONT_H3).pack(side="right", padx=14)
+            
+    # ── [YENİ] Tasarruf Tahmini Kartı ─────────────────────
+        section_line(inner)
+        tk.Label(inner, text="💰 Yıllık Tasarruf Potansiyeli", 
+                 bg=BG, fg=TEXT, font=FONT_H3).pack(anchor="w", pady=(0, 8))
+
+        bas3, tasarruf = self.analiz_motoru.tasarruf_analizi_yap(self.current_user_id)
+        
+        if bas3:
+            tasarruf_kart = tk.Frame(inner, bg="#1A2A2A", highlightthickness=1, 
+                                     highlightbackground=SUCCESS)
+            tasarruf_kart.pack(fill="x", ipady=12)
+            
+            # Sol taraf: İkon ve Metin
+            f_sol = tk.Frame(tasarruf_kart, bg="#1A2A2A")
+            f_sol.pack(side="left", padx=16)
+            tk.Label(f_sol, text="📈", bg="#1A2A2A", font=("Helvetica", 24)).pack()
+            
+            f_sag = tk.Frame(tasarruf_kart, bg="#1A2A2A")
+            f_sag.pack(side="left", fill="both", expand=True)
+            
+            tk.Label(f_sag, text=tasarruf['mesaj'], bg="#1A2A2A", fg=TEXT,
+                     font=FONT_SMALL, wraplength=450, justify="left").pack(anchor="w")
+            
+            # Sağ taraf: Büyük Rakam
+            tk.Label(tasarruf_kart, text=f"+₺{tasarruf['potansiyel_tasarruf']:,.0f}", 
+                     bg="#1A2A2A", fg=SUCCESS, font=("Helvetica", 18, "bold")).pack(side="right", padx=20)
 
     # ════════════════════════════════════════════════════════════
     # İŞ MANTIĞI
@@ -1709,9 +1671,15 @@ class App(tk.Tk):
             servis_adi, fiyat, tarih, kategori, self.current_user_id)
 
         if basarili:
+            # [YENİ BİLDİRİM]
+            messagebox.showinfo("Başarılı", f"'{servis_adi}' aboneliği başarıyla eklendi ve takibe alındı! ➕")
+            
             self.ekle_msg.config(
                 text=f"✓ '{servis_adi}' başarıyla eklendi!", fg=SUCCESS)
             self._temizle_form()
+            
+            # Arka planda bütçe verilerini tazeleyelim ki Dashboard güncel kalsın
+            self.analiz_motoru.butce_durumu_getir(self.current_user_id)
         else:
             self.ekle_msg.config(text=str(sonuc), fg=ERROR)
 
@@ -1724,6 +1692,7 @@ class App(tk.Tk):
             bas, _ = self.abonelik_motoru.sil(abonelik_id)
             if bas:
                 self._tab_liste()
+                messagebox.showinfo("Silindi", "Abonelik başarıyla silindi. 🗑️")
             else:
                 messagebox.showerror("Hata", "Silme işlemi başarısız.")
 

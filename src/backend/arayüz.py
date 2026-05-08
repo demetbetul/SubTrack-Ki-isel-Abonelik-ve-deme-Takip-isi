@@ -535,6 +535,27 @@ class App(tk.Tk):
                  font=FONT_H2).pack(anchor="w")
         tk.Label(inner, text="Abonelik durumuna hızlı göz at",
                  bg=BG, fg=MUTED, font=FONT_SMALL).pack(anchor="w", pady=(2, 16))
+        
+        bas_spot, spot = self.abonelik_motoru.en_yuksek_abonelik_getir(self.current_user_id)
+        if bas_spot:
+            spot_frame = tk.Frame(inner, bg=ACCENT, highlightthickness=0)
+            spot_frame.pack(fill="x", pady=(0, 16))
+            
+            # İçerik çerçevesi (Hafif şeffaf efekt hissi için)
+            content = tk.Frame(spot_frame, bg=CARD, padx=20, pady=15)
+            content.pack(fill="both", expand=True, padx=2, pady=2)
+            
+            tk.Label(content, text="AYIN EN BÜYÜK YÜKÜ", bg=CARD, fg=ACCENT, 
+                     font=FONT_SMALL).pack(anchor="w")
+            
+            row = tk.Frame(content, bg=CARD)
+            row.pack(fill="x")
+            
+            tk.Label(row, text=spot['ad'], bg=CARD, fg=TEXT, 
+                     font=("Helvetica", 22, "bold")).pack(side="left")
+            
+            tk.Label(row, text=f"₺{spot['tutar']:,.2f}", bg=CARD, fg=ERROR, 
+                     font=("Helvetica", 22, "bold")).pack(side="right")
 
         # ── Backend çağrıları ──
         bas1, toplam = self.abonelik_motoru.toplam_maliyet_hesapla(self.current_user_id)
@@ -1059,19 +1080,22 @@ class App(tk.Tk):
         def _kaydet():
             eski = eski_pw.get_value()
             yeni = yeni_pw.get_value()
+            
+            # 1. Alanların boş olup olmadığını kontrol et
             if not eski or not yeni:
                 mesaj_lbl.config(text="Lütfen tüm alanları doldurun.", fg=ERROR)
                 return
-            if len(yeni) < 6:
-                mesaj_lbl.config(text="Yeni şifre en az 6 karakter olmalı.", fg=ERROR)
-                return
-            bas, mesaj = self.kullanici_motoru.sifre_guncelle(
-                self.current_user_id, eski, yeni)
+            
+            # 2. Backend'deki (vt_islemleri.py) yeni yazdığımız metodu çağır
+            bas, mesaj = self.kullanici_motoru.sifre_guncelle(self.current_user_id, eski, yeni)
+            
             if bas:
-                mesaj_lbl.config(text="✅ Şifre başarıyla güncellendi!", fg=SUCCESS)
-                modal.after(1500, modal.destroy)
+                # [ZAFER ANI] Kullanıcıya işlemin başarılı olduğunu bir pop-up ile göster
+                messagebox.showinfo("Güvenlik", "Şifreniz başarıyla güncellendi! ✅")
+                modal.destroy()  # Pencereyi kapat
             else:
-                mesaj_lbl.config(text=mesaj or "Güncelleme başarısız.", fg=ERROR)
+                # Bir hata varsa (eski şifre yanlışsa vb.) ekranda kırmızı yazıyla göster
+                mesaj_lbl.config(text=mesaj, fg=ERROR)
 
         btn_row = tk.Frame(modal, bg=CARD)
         btn_row.pack(pady=12)
@@ -1357,6 +1381,7 @@ class App(tk.Tk):
 
             bas2, mesaj2 = self.kullanici_motoru.butce_guncelle(self.current_user_id, limit)
             if bas2:
+                messagebox.showinfo("Bütçe Güncellendi", f"Yeni aylık bütçe hedefiniz ₺{limit:,.2f} olarak belirlendi. 🎯")
                 modal.destroy()
                 self._tab_genel()
             else:

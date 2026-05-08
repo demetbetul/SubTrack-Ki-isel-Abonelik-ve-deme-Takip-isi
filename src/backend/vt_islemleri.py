@@ -207,6 +207,40 @@ class KullaniciIslemleri(VeritabaniTabani):
         finally:
             if conn is not None:
                 conn.close()
+                
+    def sifre_guncelle(self, kullanici_id: int, eski_sifre: str, yeni_sifre: str) -> tuple:
+        """
+        Mevcut şifreyi doğrular ve yeni şifreyi güvenli bir şekilde hash'leyerek günceller.
+        """
+        conn = None
+        try:
+            # 1. Şifreleri güvenlik için hash'le (guvenlik.py'deki fonksiyonlarını kullanarak)
+            # Eğer guvenlik.py kullanmıyorsan hashlib.sha256(...).hexdigest() kullanabilirsin.
+            eski_hash = sifreyi_ozetle(eski_sifre)
+            yeni_hash = sifreyi_ozetle(yeni_sifre)
+            
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            
+            # 2. Önce eski şifre doğru mu kontrol et (Güvenlik Katmanı)
+            cursor.execute("SELECT id FROM kullanicilar WHERE id = ? AND sifre_ozeti = ?", 
+                           (kullanici_id, eski_hash))
+            
+            if not cursor.fetchone():
+                return (False, "Mevcut şifreniz hatalı! Lütfen kontrol edin.")
+            
+            # 3. Şifre doğruysa yenisiyle güncelle
+            cursor.execute("UPDATE kullanicilar SET sifre_ozeti = ? WHERE id = ?", 
+                           (yeni_hash, kullanici_id))
+            conn.commit()
+            
+            return (True, "Şifreniz başarıyla güncellendi. ✅")
+            
+        except Exception as e:
+            return (False, f"Bir hata oluştu: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
 
 class AbonelikIslemleri(VeritabaniTabani):
@@ -473,6 +507,24 @@ class AbonelikIslemleri(VeritabaniTabani):
         finally:
             if conn is not None:
                 conn.close()
+    
+    def en_yuksek_abonelik_getir(self, kullanici_id: int):
+        """Kullanıcının en yüksek tutarlı tekil aboneliğini getirir."""
+        conn = None
+        try:
+            conn = self.baglanti_ac()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT servis_adi, tutar, kategori FROM abonelikler 
+                WHERE kullanici_id = ? 
+                ORDER BY tutar DESC LIMIT 1
+            ''', (kullanici_id,))
+            res = cursor.fetchone()
+            if res:
+                return (True, {'ad': res[0], 'tutar': res[1], 'kat': res[2]})
+            return (False, "Veri yok")
+        finally:
+            if conn: conn.close()
 
 
 class AnalizMerkezi(VeritabaniTabani):

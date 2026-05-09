@@ -4,26 +4,21 @@ from datetime import datetime, timedelta
 from guvenlik import sifreyi_ozetle, sifreyi_dogrula
 
 class VeritabaniTabani:
-    """Veritabani baglantisini ve tablo olusturmayı yoneten temel sinif."""
-    
     def __init__(self, db_adi: str = 'subtrack.db'):
         self.db_adi = db_adi
         self.tablolari_kur()
     
     def baglanti_ac(self) -> sqlite3.Connection:
-        """Veritabanına bağlantı açar."""
         try:
             return sqlite3.connect(self.db_adi)
         except sqlite3.Error as e:
             raise Exception(f"Veritabanı bağlantısı açılamadı: {str(e)}")
     
     def tablolari_kur(self):
-        """Gerekli tabloları oluşturur."""
         try:
             conn = self.baglanti_ac()
             cursor = conn.cursor()
-            
-            # kullanicilar tablosu
+    
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS kullanicilar (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +29,7 @@ class VeritabaniTabani:
                 )
             ''')
             
-            # Mevcut tabloda eksik sütunlar varsa ekle
+            
             cursor.execute("PRAGMA table_info(kullanicilar)")
             mevcut_sutunlar = [row[1] for row in cursor.fetchall()]
             if 'profil_foto' not in mevcut_sutunlar:
@@ -42,7 +37,7 @@ class VeritabaniTabani:
             if 'butce_hedefi' not in mevcut_sutunlar:
                 cursor.execute("ALTER TABLE kullanicilar ADD COLUMN butce_hedefi REAL DEFAULT 2000.0")
             
-            # abonelikler tablosu
+            
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS abonelikler (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +51,7 @@ class VeritabaniTabani:
                 )
             ''')
 
-            # Mevcut abonelikler tablosunda odendi_mi sütunu yoksa ekle (migration)
+            
             cursor.execute("PRAGMA table_info(abonelikler)")
             abone_sutunlar = [row[1] for row in cursor.fetchall()]
             if 'odendi_mi' not in abone_sutunlar:
@@ -71,7 +66,7 @@ class VeritabaniTabani:
 
 
 class KullaniciIslemleri(VeritabaniTabani):
-    """Kullanıcı kaydı ve girişini yoneten sinif."""
+    
     
     def __init__(self, db_adi: str = 'subtrack.db'):
         super().__init__(db_adi)
@@ -209,27 +204,24 @@ class KullaniciIslemleri(VeritabaniTabani):
                 conn.close()
                 
     def sifre_guncelle(self, kullanici_id: int, eski_sifre: str, yeni_sifre: str) -> tuple:
-        """
-        Mevcut şifreyi doğrular ve yeni şifreyi güvenli bir şekilde hash'leyerek günceller.
-        """
+        
         conn = None
         try:
-            # 1. Şifreleri güvenlik için hash'le (guvenlik.py'deki fonksiyonlarını kullanarak)
-            # Eğer guvenlik.py kullanmıyorsan hashlib.sha256(...).hexdigest() kullanabilirsin.
+            
             eski_hash = sifreyi_ozetle(eski_sifre)
             yeni_hash = sifreyi_ozetle(yeni_sifre)
             
             conn = self.baglanti_ac()
             cursor = conn.cursor()
             
-            # 2. Önce eski şifre doğru mu kontrol et (Güvenlik Katmanı)
+            
             cursor.execute("SELECT id FROM kullanicilar WHERE id = ? AND sifre_ozeti = ?", 
                            (kullanici_id, eski_hash))
             
             if not cursor.fetchone():
                 return (False, "Mevcut şifreniz hatalı! Lütfen kontrol edin.")
             
-            # 3. Şifre doğruysa yenisiyle güncelle
+            
             cursor.execute("UPDATE kullanicilar SET sifre_ozeti = ? WHERE id = ?", 
                            (yeni_hash, kullanici_id))
             conn.commit()
@@ -244,7 +236,7 @@ class KullaniciIslemleri(VeritabaniTabani):
 
 
 class AbonelikIslemleri(VeritabaniTabani):
-    """Abonelik ekleme, silme, güncelleme ve getirme islemlerini yoneten sinif."""
+    
     
     def __init__(self, db_adi: str = 'subtrack.db'):
         super().__init__(db_adi)
@@ -273,14 +265,10 @@ class AbonelikIslemleri(VeritabaniTabani):
             if conn is not None:
                 conn.close()
 
-    # ── YENİ: Abonelik güncelleme ──────────────────────────────────
+    
     def guncelle(self, abonelik_id: int, servis_adi: str, tutar: float,
                  tarih: str, kategori: str) -> tuple:
-        """
-        Mevcut bir aboneliğin tüm alanlarını günceller.
         
-        Dönüş: (başarı: bool, mesaj: str)
-        """
         conn = None
         try:
             if not isinstance(tutar, (int, float)) or tutar <= 0:
@@ -417,36 +405,29 @@ class AbonelikIslemleri(VeritabaniTabani):
         finally:
             if conn: conn.close()
 
-    # ── YENİ: Ödeme durumunu güncelle ──────────────────────────────
     def odeme_durumu_guncelle(self, abonelik_id: int, durum: int) -> tuple:
-        """
-        Ödeme durumunu günceller. Eğer ödendi (1) yapıldıysa, 
-        tarihi otomatik olarak bir sonraki aya öteler.
-        """
         conn = None
         try:
             conn = self.baglanti_ac()
             cursor = conn.cursor()
             
-            if durum == 1: # Ödendi olarak işaretlendi
-                # Önce mevcut tarihi al
+            if durum == 1: 
                 cursor.execute("SELECT odeme_tarihi FROM abonelikler WHERE id = ?", (abonelik_id,))
                 mevcut_tarih_str = cursor.fetchone()[0]
                 mevcut_tarih = datetime.strptime(mevcut_tarih_str, '%Y-%m-%d')
                 
-                # Tarihi 1 ay sonraya ötele (Basit mantık: 30 gün ekle veya ay değiştir)
-                # Not: calendar.monthrange kullanmak daha profesyoneldir ama şimdilik +30 gün pratik çözümdür.
+                
                 yeni_tarih = mevcut_tarih + timedelta(days=30)
                 yeni_tarih_str = yeni_tarih.strftime('%Y-%m-%d')
                 
-                # Hem durumu 1 yap hem tarihi güncelle hem de bütçe senkronu için odendi_mi tut
+                
                 cursor.execute('''
                     UPDATE abonelikler 
                     SET odendi_mi = ?, odeme_tarihi = ? 
                     WHERE id = ?
                 ''', (1, yeni_tarih_str, abonelik_id))
             else:
-                # Ödenmedi (Bekliyor) durumuna geri çekme
+                
                 cursor.execute("UPDATE abonelikler SET odendi_mi = ? WHERE id = ?", (0, abonelik_id))
                 
             conn.commit()
@@ -456,14 +437,9 @@ class AbonelikIslemleri(VeritabaniTabani):
         finally:
             if conn: conn.close()
 
-    # ── YENİ: Ayın 1'inde otomatik sıfırlama ──────────────────────
+    
     def aylik_odeme_sifirla(self, kullanici_id: int) -> tuple:
-        """
-        Kullanıcının tüm aboneliklerinin ödendi_mi değerini 0'a sıfırlar.
-        Her ayın 1'inde çağrılmak üzere tasarlanmıştır.
-
-        Dönüş: (başarı: bool, sifirlanan_adet: int veya hata_mesaji: str)
-        """
+        
         conn = None
         try:
             conn = self.baglanti_ac()
@@ -480,12 +456,7 @@ class AbonelikIslemleri(VeritabaniTabani):
             if conn is not None:
                 conn.close()
     def yarin_odemeleri_bul(self, kullanici_id: int) -> tuple:
-        """
-        Yarın ödeme tarihi olan ve henüz ödenmemiş abonelikleri bulur.
-        win10toast bildirimleri için kullanılır.
-
-        Dönüş: (başarı: bool, liste: List[Dict])
-        """
+        
         conn = None
         try:
             yarin = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
@@ -519,7 +490,7 @@ class AbonelikIslemleri(VeritabaniTabani):
                 conn.close()
     
     def en_yuksek_abonelik_getir(self, kullanici_id: int):
-        """Kullanıcının en yüksek tutarlı tekil aboneliğini getirir."""
+        
         conn = None
         try:
             conn = self.baglanti_ac()
@@ -538,7 +509,7 @@ class AbonelikIslemleri(VeritabaniTabani):
 
 
 class AnalizMerkezi(VeritabaniTabani):
-    """Abone maliyetleri ve kategorilere göre analiz yapan sinif."""
+    
     
     def __init__(self, db_adi: str = 'subtrack.db'):
         super().__init__(db_adi)
@@ -625,21 +596,9 @@ class AnalizMerkezi(VeritabaniTabani):
             if conn is not None:
                 conn.close()
 
-    # ── YENİ: Yıllık Projeksiyon ───────────────────────────────────
+    
     def yillik_projeksiyon_hesapla(self, kullanici_id: int) -> tuple:
-        """
-        Mevcut aboneliklerin 12 aylık toplam maliyetini ve gelecek yıl
-        beklenen yükü hesaplar (%10 fiyat artışı varsayımıyla).
         
-        Dönüş:
-            tuple: (başarı: bool, {
-                'aylik_toplam': float,
-                'yillik_toplam': float,
-                'gelecek_yil_tahmini': float,
-                'aylik_ortalama': float,
-                'en_pahali': dict veya None
-            })
-        """
         conn = None
         try:
             conn = self.baglanti_ac()
@@ -690,27 +649,12 @@ class AnalizMerkezi(VeritabaniTabani):
             if conn is not None:
                 conn.close()
 
-    # ── YENİ: İptal Önerisi Mantığı ────────────────────────────────
+   
     def iptal_onerisi_getir(self, kullanici_id: int) -> tuple:
-        """
-        Bütçe aşıldığında iptal edilmesi önerilen aboneliği belirler.
         
-        Mantık:
-          1. Bütçe aşılmadıysa öneri yok.
-          2. Aşıldıysa; kategori yoğunluğu en yüksek kategorideki
-             en pahalı aboneliği önerir. 
-             Yoğunluk eşitse en pahalı abonelik seçilir.
-        
-        Dönüş:
-            tuple: (başarı: bool, {
-                'oneri_var': bool,
-                'abonelik': dict veya None,
-                'sebep': str
-            })
-        """
         conn = None
         try:
-            # Önce bütçe durumunu kontrol et
+           
             bas, butce = self.butce_durumu_getir(kullanici_id)
             if not bas:
                 return (False, "Bütçe bilgisi alınamadı.")
@@ -725,7 +669,7 @@ class AnalizMerkezi(VeritabaniTabani):
             conn = self.baglanti_ac()
             cursor = conn.cursor()
             
-            # Kategori yoğunluğunu bul
+            
             cursor.execute('''
                 SELECT kategori, COUNT(*) as sayi, SUM(tutar) as toplam
                 FROM abonelikler
@@ -738,10 +682,10 @@ class AnalizMerkezi(VeritabaniTabani):
             if not kat_satirlar:
                 return (True, {'oneri_var': False, 'abonelik': None, 'sebep': 'Abonelik yok.'})
             
-            # En yoğun kategori
+           
             hedef_kat = kat_satirlar[0][0]
             
-            # O kategorideki en pahalı abonelik
+            
             cursor.execute('''
                 SELECT id, servis_adi, tutar, odeme_tarihi, kategori
                 FROM abonelikler
@@ -779,7 +723,7 @@ class AnalizMerkezi(VeritabaniTabani):
                 conn.close()
 
     def yaklasan_odemeleri_bul(self, kullanici_id: int, gun_sayisi: int = 3) -> tuple:
-        """Belirtilen gün içinde ödeme tarihi olan ve henüz ödenmemiş abonelikleri bulur."""
+        
         conn = None
         try:
             bugun = datetime.now()
@@ -809,12 +753,12 @@ class AnalizMerkezi(VeritabaniTabani):
             return (False, str(e))
         finally:
             if conn is not None:
-                # cursor nesnesinin kapandığından emin olmak için güvenli kapatma
+                
                 if 'cursor' in locals():
                     cursor.close()
                 conn.close()
     def en_pahali_ve_en_ucuz(self, kullanici_id: int) -> tuple:
-        """Kullanıcının en yüksek ve en düşük tutarlı aboneliklerini bulur."""
+        
         conn = None
         try:
             conn = self.baglanti_ac()
@@ -836,7 +780,7 @@ class AnalizMerkezi(VeritabaniTabani):
             if conn: conn.close()
             
     def tasarruf_analizi_yap(self, kullanici_id: int) -> tuple:
-        """Kullanıcının harcama alışkanlıklarını analiz ederek yıllık tasarruf projeksiyonu sunar."""
+        
         conn = None
         try:
             conn = self.baglanti_ac()
@@ -857,7 +801,7 @@ class AnalizMerkezi(VeritabaniTabani):
             kategori_adi = en_cok_kat[0]
             aylik_harcama = en_cok_kat[1]
             
-            # %15 Tasarruf Senaryosu
+            
             aylik_tasarruf = aylik_harcama * 0.15
             yillik_tasarruf = aylik_tasarruf * 12
 
